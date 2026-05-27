@@ -37,6 +37,7 @@ namespace NinjaTrader.NinjaScript.Strategies
         private double  signalScale1Price  = 0;
         private int     signalScale1Qty    = 0;
         private double  signalTrailPoints  = 0;
+        private double  signalEMA21AtEntry = 0;
 
         // Position state
         private bool    inPosition         = false;
@@ -45,8 +46,14 @@ namespace NinjaTrader.NinjaScript.Strategies
         private bool    scale1Hit          = false;
         private int     remainingQty       = 0;
         private bool    trailActive        = false;
-        private double  trailStopPrice     = 0;  // manual trailing stop level
-        private double  trailPeak          = 0;  // highest high (long) / lowest low (short) since trail activated
+        private double  trailStopPrice     = 0;
+        private double  trailPeak          = 0;
+
+        // Thesis invalidation watchdog
+        private double  invalidationLevel  = 0;   // EMA21 level at entry
+        private int     adverseCloseCount  = 0;   // consecutive closes beyond invalidation
+        private int     lastWatchdogBar    = -1;  // prevent double-counting on same bar
+        private const int MaxAdverseCloses = 2;   // exit after this many consecutive adverse closes
 
         #endregion
 
@@ -128,6 +135,37 @@ namespace NinjaTrader.NinjaScript.Strategies
                 }
             }
 
+            // LTF candle close watchdog — check on each new completed bar
+            if (inPosition && !scale1Hit && invalidationLevel > 0 && CurrentBar != lastWatchdogBar && CurrentBar > 0)
+            {
+                lastWatchdogBar = CurrentBar;
+                double prevClose = Close[1]; // most recently completed bar's close
+
+                bool adverseClose = (signalDirection == "LONG" && prevClose < invalidationLevel)
+                                 || (signalDirection == "SHORT" && prevClose > invalidationLevel);
+
+                if (adverseClose)
+                {
+                    adverseCloseCount++;
+                    Print($"[WATCHDOG] Adverse close #{adverseCloseCount}: {prevClose:F2} beyond level {invalidationLevel:F2}");
+
+                    if (adverseCloseCount >= MaxAdverseCloses)
+                    {
+                        Print($"[WATCHDOG EXIT] {adverseCloseCount} consecutive closes beyond invalidation — exiting");
+                        if (Position.MarketPosition == MarketPosition.Long)
+                            ExitLong(0, Position.Quantity, "WatchdogExit", "CT_Long");
+                        else if (Position.MarketPosition == MarketPosition.Short)
+                            ExitShort(0, Position.Quantity, "WatchdogExit", "CT_Short");
+                    }
+                }
+                else
+                {
+                    if (adverseCloseCount > 0)
+                        Print($"[WATCHDOG] Price recovered — resetting adverse count");
+                    adverseCloseCount = 0;
+                }
+            }
+
             // Clean up state when flat
             if (Position.MarketPosition == MarketPosition.Flat && inPosition)
                 ResetState();
@@ -183,17 +221,37 @@ namespace NinjaTrader.NinjaScript.Strategies
                 return;
             }
 
+            // Handle EXIT signal from Claude thesis invalidation
+            string dir = f[1].Trim().ToUpper();
+            if (dir == "EXIT")
+            {
+                if (Position.MarketPosition == MarketPosition.Long)
+                {
+                    ExitLong(0, Position.Quantity, "ThesisExit", "CT_Long");
+                    Print("[THESIS EXIT] Claude invalidated trade — closing LONG");
+                }
+                else if (Position.MarketPosition == MarketPosition.Short)
+                {
+                    ExitShort(0, Position.Quantity, "ThesisExit", "CT_Short");
+                    Print("[THESIS EXIT] Claude invalidated trade — closing SHORT");
+                }
+                ClearSignalFile();
+                return;
+            }
+
             // Required fields
-            signalDirection = f[1].Trim().ToUpper();
+            signalDirection = dir;
             if (!double.TryParse(f[2].Trim(), out signalEntry))  return;
             if (!double.TryParse(f[3].Trim(), out signalStop))   return;
             if (!double.TryParse(f[4].Trim(), out signalTarget))  return;
 
             // Optional sizing fields (backward compatible)
-            signalContracts   = f.Length > 5 && int.TryParse(f[5].Trim(), out int c)   ? Math.Max(1, c)  : 1;
+            signalContracts   = f.Length > 5 && int.TryParse(f[5].Trim(), out int c)       ? Math.Max(1, c) : 1;
             signalScale1Price = f.Length > 6 && double.TryParse(f[6].Trim(), out double s1) ? s1 : 0;
-            signalScale1Qty   = f.Length > 7 && int.TryParse(f[7].Trim(), out int s1q) ? s1q : 0;
+            signalScale1Qty   = f.Length > 7 && int.TryParse(f[7].Trim(), out int s1q)      ? s1q : 0;
             signalTrailPoints = f.Length > 8 && double.TryParse(f[8].Trim(), out double tp) ? tp : 0;
+            // EMA21 at entry — real thesis invalidation level (not the stop)
+            signalEMA21AtEntry = f.Length > 9 && double.TryParse(f[9].Trim(), out double e21) && e21 > 0 ? e21 : 0;
 
             currentSignalId = signalId;
             scale1Hit       = false;
@@ -251,7 +309,15 @@ namespace NinjaTrader.NinjaScript.Strategies
                 Print($"[FILLED] {signalDirection} {qty}c @ {actualEntry:F2} | Position: {Position.Quantity}/{signalContracts}");
 
                 if (Position.Quantity == signalContracts)
+                {
                     PlaceExitOrders();
+                    // Use EMA21 at entry as invalidation level — a close beyond this
+                    // means the trade thesis (EMA bounce/support) has broken.
+                    // Falls back to stop only if EMA21 wasn't provided.
+                    invalidationLevel = signalEMA21AtEntry > 0 ? signalEMA21AtEntry : signalStop;
+                    adverseCloseCount = 0;
+                    Print($"[WATCHDOG ARMED] Invalidation level: {invalidationLevel:F2} ({(signalEMA21AtEntry > 0 ? "EMA21" : "stop fallback")})");
+                }
                 else
                     Print($"[PARTIAL] {Position.Quantity}/{signalContracts} — waiting for full fill");
             }
@@ -277,21 +343,30 @@ namespace NinjaTrader.NinjaScript.Strategies
                         Print($"[BE STOP] Stop moved to breakeven {actualEntry:F2} for {remainingQty}c");
                     }
 
-                    // Enable manual trail in OnBarUpdate if configured
-                    if (signalTrailPoints > 0)
+                    // Enable manual trail in OnBarUpdate if configured.
+                    // Cancel the existing TP limit first to prevent double-exit
+                    // on remaining contracts (trail + TP both live = OCO risk).
+                    if (signalTrailPoints > 0 && remainingQty > 0)
                     {
+                        // Cancel open TP order on remaining contracts before arming trail
+                        if (signalDirection == "LONG")
+                            ExitLong(0, remainingQty, "TP_Cancel", "CT_Long");
+                        else
+                            ExitShort(0, remainingQty, "TP_Cancel", "CT_Short");
+
                         trailActive    = true;
-                        trailPeak      = signalDirection == "LONG" ? actualEntry : actualEntry;
+                        trailPeak      = actualEntry;
                         trailStopPrice = signalDirection == "LONG"
                             ? actualEntry - signalTrailPoints
                             : actualEntry + signalTrailPoints;
-                        Print($"[TRAIL ARMED] Stop={trailStopPrice:F2} trail={signalTrailPoints}pts");
+                        Print($"[TRAIL ARMED] TP cancelled, trail stop={trailStopPrice:F2} trail={signalTrailPoints}pts");
                     }
                 }
             }
 
-            // TP or SL exit
-            else if (name == "TP" || name == "SL")
+            // All exit types — log them all
+            else if (name == "TP" || name == "SL" || name == "Scale1" ||
+                     name == "TrailStop" || name == "WatchdogExit" || name == "ThesisExit")
             {
                 double pnl = signalDirection == "LONG"
                     ? (price - actualEntry) * qty
@@ -366,14 +441,18 @@ namespace NinjaTrader.NinjaScript.Strategies
 
         private void ResetState()
         {
-            inPosition      = false;
-            hasOpenOrder    = false;
-            scale1Hit       = false;
-            trailActive     = false;
-            trailPeak       = 0;
-            trailStopPrice  = 0;
-            remainingQty    = 0;
-            currentSignalId = "";
+            inPosition        = false;
+            hasOpenOrder      = false;
+            scale1Hit         = false;
+            trailActive       = false;
+            trailPeak         = 0;
+            trailStopPrice    = 0;
+            remainingQty      = 0;
+            currentSignalId   = "";
+            invalidationLevel  = 0;
+            adverseCloseCount  = 0;
+            lastWatchdogBar    = -1;
+            signalEMA21AtEntry = 0;
         }
 
         private void LogTrade(string dir, double entry, double exit, double pnl)

@@ -20,7 +20,7 @@ class FVGDisplay:
         self.last_historical_mod_time = None
 
     def check_historical_updated(self):
-        """Check if HistoricalData.csv has been updated (new hourly bar)"""
+        """Check if HistoricalData.csv has been updated (new new bar)"""
         try:
             if not os.path.exists(self.historical_path):
                 return False
@@ -157,7 +157,7 @@ class FVGDisplay:
         is_new_bar = self.last_processed_bar_time != latest_bar_time
 
         if is_new_bar:
-            logger.info(f"New hourly bar detected at {latest_bar_time}")
+            logger.info(f"New bar detected at {latest_bar_time}")
 
             # Look for new FVGs
             self.find_new_fvgs(df, current_index)
@@ -464,7 +464,7 @@ class FVGDisplay:
 
         instrument_display = self.instrument if self.instrument else "auto-detecting..."
         logger.info(f"Displaying FVGs for {instrument_display}")
-        logger.info("Monitoring HistoricalData.csv for new hourly bars and FVGs...")
+        logger.info("Monitoring HistoricalData.csv for new new bars and FVGs...")
         logger.info("Monitoring LiveFeed.csv for real-time price updates...")
         logger.info("Display updates every second with live price data...")
 
@@ -484,7 +484,7 @@ class FVGDisplay:
 
         try:
             while True:
-                # Check for new hourly bars (new FVGs)
+                # Check for new new bars (new FVGs)
                 if self.check_historical_updated():
                     self.process_historical_bars()
 

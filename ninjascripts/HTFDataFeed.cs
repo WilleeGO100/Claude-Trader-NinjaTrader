@@ -1,8 +1,11 @@
 #region Using declarations
 using System;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.IO;
 using NinjaTrader.Cbi;
 using NinjaTrader.NinjaScript;
+using NinjaTrader.NinjaScript.Strategies;
 #endregion
 
 // Apply this strategy to a 4-HOUR NQ chart.
@@ -76,8 +79,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         }
 
         #region Properties
-        [NinjaTrader.NinjaScript.NinjaScriptProperty]
-        [System.ComponentModel.Display(Name = "Output File Path", Order = 1, GroupName = "HTFDataFeed")]
+        [NinjaScriptProperty]
+        [Display(Name = "Output File Path", Order = 1, GroupName = "HTFDataFeed")]
         public string OutputFilePath { get; set; }
         #endregion
     }

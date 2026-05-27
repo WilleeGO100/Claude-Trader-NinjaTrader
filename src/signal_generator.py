@@ -46,7 +46,7 @@ class SignalGenerator:
         logger.info(f"SignalGenerator initialized (output={self.output_file})")
 
     # New CSV header including sizing fields
-    CSV_HEADER = 'DateTime,Direction,Entry_Price,Stop_Loss,Target,Contracts,Scale1_Price,Scale1_Contracts,Trail_Points'
+    CSV_HEADER = 'DateTime,Direction,Entry_Price,Stop_Loss,Target,Contracts,Scale1_Price,Scale1_Contracts,Trail_Points,EMA21_At_Entry'
 
     def _initialize_csv(self):
         """Initialize CSV file with headers"""
@@ -113,7 +113,6 @@ class SignalGenerator:
                 if abs(target - expected_target) > 0.1:  # Allow 0.1pt tolerance
                     return False, f"SHORT buffer error: target ({target}) should be raw_target + 5 ({expected_target})"
 
-        # Calculate and validate R:R ratio with final target (after buffer)
         risk = abs(entry - stop)
         reward = abs(target - entry)
 
@@ -121,12 +120,6 @@ class SignalGenerator:
             return False, "Risk cannot be zero (entry == stop)"
 
         rr_ratio = reward / risk
-
-        # Minimum R:R requirement: 1.3:1
-        min_rr = 1.3
-        if rr_ratio < min_rr:
-            return False, f"R:R too low: {rr_ratio:.2f}:1 (minimum {min_rr}:1 required after 5pt buffer)"
-
         logger.info(f"Validation passed: {decision['decision']} | R:R = {rr_ratio:.2f}:1 | "
                     f"Risk: {risk:.2f}pts | Reward: {reward:.2f}pts")
 
@@ -165,6 +158,7 @@ class SignalGenerator:
             f"{decision.get('scale1_price', 0):.2f}",
             str(decision.get('scale1_contracts', 0)),
             str(decision.get('trail_points', 0)),
+            f"{decision.get('ema21_at_entry', 0):.2f}",
         ]
 
         # Append to CSV
@@ -278,6 +272,20 @@ class SignalGenerator:
             return []
 
         return signals
+
+    def generate_exit_signal(self) -> bool:
+        """Write an EXIT signal to close any open NinjaTrader position immediately"""
+        try:
+            time_str = datetime.now().strftime('%m/%d/%Y %H:%M:%S')
+            row = [time_str, 'EXIT', '0', '0', '0', '0', '0', '0', '0']
+            with open(self.output_file, 'a', newline='') as f:
+                writer = csv.writer(f)
+                writer.writerow(row)
+            logger.warning(f"EXIT signal written at {time_str}")
+            return True
+        except Exception as e:
+            logger.error(f"Error writing EXIT signal: {e}")
+            return False
 
     def clear_signals(self):
         """Clear all signals (reinitialize CSV)"""

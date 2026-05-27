@@ -1,6 +1,15 @@
 """
 Session Filter Module
-Controls when trading is allowed based on market session and time of day
+Controls when trading is allowed based on market session.
+All times are ET (America/New_York).
+
+Config sessions:
+  ny_open  — New York main session      09:30-16:00 ET
+  london   — London/European session    03:00-12:00 ET
+  asian    — Asian/overnight session    18:00-02:00 ET (crosses midnight)
+
+Toggle each session on/off independently in agent_config.json.
+Master switch: session_rules.enabled = false disables all filtering.
 """
 
 import logging
@@ -14,31 +23,51 @@ ET = ZoneInfo("America/New_York")
 
 
 class SessionFilter:
-    """Filters trading based on active market session"""
 
     def __init__(self, config: dict):
-        rules = config.get('session_rules', {})
+        rules = self.rules = config.get('session_rules', {})
         self.enabled = rules.get('enabled', True)
-
-        # NY session window
-        self.ny_start = self._parse_time(rules.get('ny_open_start', '09:30'))
-        self.ny_end = self._parse_time(rules.get('ny_open_end', '16:00'))
-
-        # London/NY overlap window
-        self.london_start = self._parse_time(rules.get('london_start', '03:00'))
-        self.london_end = self._parse_time(rules.get('london_end', '12:00'))
-
-        # Lunch avoidance
         self.avoid_lunch = rules.get('avoid_lunch', True)
-        self.lunch_start = self._parse_time(rules.get('lunch_start', '12:00'))
-        self.lunch_end = self._parse_time(rules.get('lunch_end', '13:00'))
+        self.lunch_start = self._t(rules.get('lunch_start', '12:00'))
+        self.lunch_end   = self._t(rules.get('lunch_end',   '13:00'))
 
-        # Allowed sessions
-        self.allowed_sessions = rules.get('allowed_sessions', ['ny_open', 'london_overlap'])
+        # NY open blackout — avoids the chaotic first X minutes of NY session
+        self.avoid_ny_open = rules.get('avoid_ny_open', True)
+        blackout_mins      = rules.get('ny_open_blackout_minutes', 30)
+        ny_open_hour, ny_open_min = 9, 30
+        blackout_end_min   = ny_open_min + blackout_mins
+        blackout_end_hour  = ny_open_hour + blackout_end_min // 60
+        blackout_end_min   = blackout_end_min % 60
+        self.ny_open_blackout_start = time(ny_open_hour, ny_open_min)
+        self.ny_open_blackout_end   = time(blackout_end_hour, blackout_end_min)
 
-    def _parse_time(self, time_str: str) -> time:
-        h, m = map(int, time_str.split(':'))
+        # Load each session
+        self.sessions = {}
+        for name in ('ny_open', 'london', 'asian'):
+            cfg = rules.get(name, {})
+            self.sessions[name] = {
+                'enabled': cfg.get('enabled', False),
+                'start':   self._t(cfg.get('start', '00:00')),
+                'end':     self._t(cfg.get('end',   '00:00')),
+                'crosses_midnight': self._crosses_midnight(
+                    cfg.get('start', '00:00'), cfg.get('end', '00:00')
+                ),
+                'description': cfg.get('description', name),
+            }
+
+        enabled_names = [n for n, s in self.sessions.items() if s['enabled']]
+        logger.info(f"SessionFilter: enabled={self.enabled} sessions={enabled_names}")
+
+    @staticmethod
+    def _t(s: str) -> time:
+        h, m = map(int, s.split(':'))
         return time(h, m)
+
+    @staticmethod
+    def _crosses_midnight(start_str: str, end_str: str) -> bool:
+        h_s, m_s = map(int, start_str.split(':'))
+        h_e, m_e = map(int, end_str.split(':'))
+        return time(h_s, m_s) > time(h_e, m_e)
 
     def _get_et_time(self, dt: Optional[datetime] = None) -> time:
         if dt is None:
@@ -47,35 +76,33 @@ class SessionFilter:
             dt = dt.replace(tzinfo=ET)
         return dt.astimezone(ET).time()
 
-    def is_trading_allowed(self, dt: Optional[datetime] = None) -> tuple[bool, str]:
-        """
-        Check if trading is allowed at the given time.
+    def _in_session(self, t: time, session: dict) -> bool:
+        s, e = session['start'], session['end']
+        if session['crosses_midnight']:
+            return t >= s or t < e
+        return s <= t < e
 
-        Returns:
-            (allowed, reason) tuple
-        """
+    def is_trading_allowed(self, dt: Optional[datetime] = None) -> tuple[bool, str]:
         if not self.enabled:
             return True, "Session filter disabled"
 
         t = self._get_et_time(dt)
 
-        # Check lunch avoidance first
-        if self.avoid_lunch and self.lunch_start <= t < self.lunch_end:
-            return False, f"Lunch hour ({self.lunch_start.strftime('%H:%M')}-{self.lunch_end.strftime('%H:%M')} ET)"
+        # NY open blackout — block first X minutes of NY session
+        if self.avoid_ny_open and self.ny_open_blackout_start <= t < self.ny_open_blackout_end:
+            end_str = self.ny_open_blackout_end.strftime('%H:%M')
+            return False, f"NY open blackout until {end_str} ET (volatile first {(self.ny_open_blackout_end.hour * 60 + self.ny_open_blackout_end.minute) - 570}min)"
 
-        in_ny = self.ny_start <= t < self.ny_end
-        in_london = self.london_start <= t < self.london_end
+        # Lunch block (only matters if inside an otherwise allowed session)
+        in_lunch = self.avoid_lunch and self.lunch_start <= t < self.lunch_end
 
-        if 'ny_open' in self.allowed_sessions and in_ny:
-            return True, "NY session"
-        if 'london_overlap' in self.allowed_sessions and in_london:
-            return True, "London/NY session"
+        for name, session in self.sessions.items():
+            if not session['enabled']:
+                continue
+            if self._in_session(t, session):
+                if in_lunch:
+                    return False, f"Lunch break ({self.lunch_start.strftime('%H:%M')}-{self.lunch_end.strftime('%H:%M')} ET)"
+                return True, session['description']
 
-        active = []
-        if in_ny:
-            active.append("NY")
-        if in_london:
-            active.append("London")
-        session_str = "/".join(active) if active else "off-hours"
-
-        return False, f"Outside allowed sessions (currently {session_str}, ET time {t.strftime('%H:%M')})"
+        active = [n for n, s in self.sessions.items() if s['enabled'] and self._in_session(t, s)]
+        return False, f"Outside enabled sessions (ET {t.strftime('%H:%M')})"

@@ -8,3 +8,4 @@ python-dotenv>=1.0.0       # Environment variable management
 
 # Additional dependencies for trading system
 typing-extensions>=4.0.0   # Type hints support
+groq>=0.9.0                # Groq API for intrabar watchdog (fast, free)

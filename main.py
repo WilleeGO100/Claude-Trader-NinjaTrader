@@ -23,12 +23,22 @@ from src.backtest_engine import BacktestEngine
 from src.market_analysis_manager import MarketAnalysisManager
 from src.session_filter import SessionFilter
 from src.news_filter import NewsFilter
+from src.news_scanner import NewsScanner
 from src.position_sizer import PositionSizer
 from src.analytics import Analytics
 from src.htf_analyzer import HTFAnalyzer
+from src.intrabar_watchdog import IntrabarWatchdog
+from src.trade_notifier import TradeNotifier
+from src.setup_quality import compute_setup_quality
+from src.gamma_level_loader import GammaLevelLoader
+from src.order_flow_reader import OrderFlowReader
+from src.dom_analyzer import DOMAnalyzer
 
 # Load environment variables
 load_dotenv()
+
+# Suppress noisy httpx request logs from Groq/Anthropic
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # Configure logging
 def setup_logging(log_level: str = "INFO", log_file: str = None):
@@ -94,6 +104,28 @@ class TradingOrchestrator:
         self.news_filter = NewsFilter(self.config)
         self.position_sizer = PositionSizer(self.config)
         self.htf_analyzer = HTFAnalyzer()
+        self.watchdog      = IntrabarWatchdog(self.config, self.signal_generator)
+        self.notifier      = TradeNotifier()
+        self.gamma         = GammaLevelLoader()
+        self.order_flow    = OrderFlowReader()
+        self.dom           = DOMAnalyzer()
+
+        # Scan for upcoming news events at startup
+        try:
+            scanner = NewsScanner()
+            scanner.refresh(days_ahead=3)
+        except Exception as e:
+            logger.warning(f"News scanner failed: {e}")
+
+        # Clear stale analysis state on startup — delete file AND reset in-memory state
+        analysis_file = Path("data/market_analysis.json")
+        if analysis_file.exists():
+            analysis_file.unlink()
+        self.analysis_manager.current_analysis = self.analysis_manager._get_empty_analysis()
+        logger.info("Cleared stale market analysis state on startup")
+
+        # Initialize completed trade count after all components ready
+        self._completed_trade_count = self._count_completed_trades()
 
         # Trading agent (requires API key)
         api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -108,6 +140,10 @@ class TradingOrchestrator:
         self.daily_pnl = 0.0
         self.consecutive_losses = 0
         self.trading_paused = False
+
+        # Open position tracking — must be set before anything checks it
+        self.open_position = None
+        self._completed_trade_count = 0
 
         # Initialization complete
 
@@ -136,6 +172,24 @@ class TradingOrchestrator:
 
         return True, ""
 
+    def _count_completed_trades(self) -> int:
+        """Count completed trades in trades_taken.csv"""
+        try:
+            import csv as csv_mod
+            with open('data/trades_taken.csv', 'r') as f:
+                rows = list(csv_mod.DictReader(f))
+            return sum(1 for r in rows if r.get('Exit_Price', '').strip() not in ('', 'None', '0.00'))
+        except Exception:
+            return 0
+
+    def _check_position_closed(self) -> bool:
+        """Returns True if a new exit appeared in trades_taken.csv since we opened"""
+        current_count = self._count_completed_trades()
+        if current_count > self._completed_trade_count:
+            self._completed_trade_count = current_count
+            return True
+        return False
+
     def run_live_mode(self):
         """Run in live trading mode"""
         # Starting live mode silently
@@ -161,6 +215,30 @@ class TradingOrchestrator:
         logger.info(f"Loaded {len(fvg_display.active_fvgs)} active FVGs")
         logger.info("="*60)
 
+        # Start intrabar watchdog (background thread)
+        def on_watchdog_entry(position):
+            self.open_position = position
+            self.daily_trades += 1
+            self._completed_trade_count = self._count_completed_trades()
+            logger.info(f"Watchdog fired entry — position tracking active")
+            risk   = abs(position['entry'] - position['stop'])
+            reward = abs(position['target'] - position['entry'])
+            rr     = reward / risk if risk > 0 else 0
+            self.notifier.on_entry(
+                direction=position['direction'],
+                entry=position['entry'],
+                stop=position['stop'],
+                target=position['target'],
+                confidence=position.get('confidence', 0.65),
+                setup_type='watchdog',
+                source='Groq Watchdog',
+                contracts=1,
+            )
+            self.notifier.on_watchdog_fire(position['direction'], position['entry'], rr)
+
+        self.watchdog.on_entry_fired = on_watchdog_entry
+        self.watchdog.start()
+
         # Track last processed bar and result
         last_bar_time = None
         last_result = None
@@ -183,6 +261,38 @@ class TradingOrchestrator:
 
                     # Update last processed time
                     last_bar_time = current_bar_time
+
+                    # Check if open position was closed by NinjaTrader
+                    if self.open_position and self._check_position_closed():
+                        logger.info("Position closed detected — resetting position state")
+                        closed = self.open_position
+                        self.open_position = None
+                        # Read exit details from trades_taken.csv
+                        try:
+                            import csv as _csv
+                            with open('data/trades_taken.csv') as f:
+                                rows = list(_csv.DictReader(f))
+                            last = rows[-1] if rows else {}
+                            exit_price = float(last.get('Exit_Price', 0) or 0)
+                            pnl        = float(last.get('PnL_Points', 0) or 0)
+                            self.notifier.on_exit(
+                                direction=closed['direction'],
+                                entry=closed['entry'],
+                                exit_price=exit_price or closed['entry'],
+                                pnl=pnl or None,
+                                exit_reason='NinjaTrader exit',
+                                bars_held=closed.get('bars_in_trade', 0),
+                            )
+                        except Exception:
+                            pass
+
+                    # Increment bars-in-trade counter
+                    if self.open_position:
+                        self.open_position['bars_in_trade'] += 1
+
+                    # Sync watchdog with current position state and new bar
+                    self.watchdog.set_open_position(self.open_position)
+                    self.watchdog.notify_new_bar(current_bar_time)
 
                     # Check for new bars
                     if fvg_display.check_historical_updated():
@@ -223,8 +333,11 @@ class TradingOrchestrator:
                         time.sleep(5)
                         continue
 
-                    # Analyze market context
-                    fvg_context = self.fvg_analyzer.analyze_market_context(current_price, active_fvgs)
+                    # Build recent bars list for reversal confirmation
+                    recent_bars = historical_df.tail(2).to_dict('records')
+
+                    # Analyze market context (with reversal confirmation)
+                    fvg_context = self.fvg_analyzer.analyze_market_context(current_price, active_fvgs, recent_bars)
 
                     # Debug: Show filtering results
                     logger.info(f"After filtering - Nearest Bullish: {fvg_context['nearest_bullish_fvg'] is not None}, "
@@ -241,12 +354,12 @@ class TradingOrchestrator:
                         'stochastic': current_bar.get('StochD', 50)
                     }
 
-                    # Check session rules (set enabled: false in config to disable)
-                    # session_ok, session_reason = self.session_filter.is_trading_allowed()
-                    # if not session_ok:
-                    #     logger.info(f"Session filter: {session_reason}")
-                    #     time.sleep(60)
-                    #     continue
+                    # Check session rules
+                    session_ok, session_reason = self.session_filter.is_trading_allowed()
+                    if not session_ok:
+                        logger.info(f"Session blocked: {session_reason}")
+                        time.sleep(60)
+                        continue
 
                     # Check news blackouts
                     news_ok, news_reason = self.news_filter.is_trading_allowed()
@@ -268,15 +381,22 @@ class TradingOrchestrator:
                     # Get previous analysis for incremental updates
                     previous_analysis = self.analysis_manager.format_previous_analysis_for_prompt()
 
-                    # Analyze with Claude (only on new bar)
-                    htf_bias = self.htf_analyzer.get_bias()
+                    # Pause watchdog during Claude's API call to prevent conflicts
+                    self.watchdog.pause()
+                    htf_bias      = self.htf_analyzer.get_bias()
+                    gamma_section = self.gamma.get_prompt_section(current_price)
+                    of_context    = self.order_flow.get_context(current_price)
+                    dom_context   = self.dom.get_context(current_price)
                     try:
+                        of_section  = of_context.get('prompt_section', '')
+                        dom_section = dom_context.get('prompt_section', '')
                         result = self.trading_agent.analyze_setup(
                             fvg_context,
                             market_data,
                             memory_context,
                             previous_analysis,
-                            htf_bias.get('prompt_section', '')
+                            htf_bias.get('prompt_section', '') + gamma_section + of_section + dom_section,
+                            self.open_position
                         )
                         last_result = result
 
@@ -300,51 +420,112 @@ class TradingOrchestrator:
 
                             primary = decision_data['primary_decision']
 
-                            if primary != 'NONE':
-                                # Get the chosen setup
-                                chosen_setup = decision_data['long_setup'] if primary == 'LONG' else decision_data['short_setup']
-
-                                # Compute position sizing
-                                confidence = chosen_setup.get('confidence', 0.65)
-                                sizing = self.position_sizer.compute_trade_sizing(
-                                    direction=primary,
-                                    entry=chosen_setup['entry'],
-                                    stop=chosen_setup['stop'],
-                                    target=chosen_setup['target'],
-                                    confidence=confidence
-                                )
-
-                                signal = {
-                                    'decision': primary,
-                                    'entry': chosen_setup['entry'],
-                                    'stop': chosen_setup['stop'],
-                                    'target': chosen_setup['target'],
-                                    'risk_reward': chosen_setup['risk_reward'],
-                                    'confidence': confidence,
-                                    'reasoning': decision_data['overall_reasoning'],
-                                    'setup_type': 'fvg_only',
-                                    **sizing
-                                }
-
-                                # Log signal generation attempt
-                                logger.info(f"GENERATING TRADE SIGNAL: {primary} @ {signal['entry']:.0f}")
-                                logger.info(f"R:R {signal['risk_reward']:.2f}:1 | Confidence: {signal['confidence']:.2f}")
-
-                                # Generate signal
+                            if primary == 'EXIT':
+                                # Claude says thesis invalidated — close position
+                                logger.warning("EXIT SIGNAL: Claude determined thesis is invalid — closing position")
                                 try:
-                                    success = self.signal_generator.generate_signal(signal)
-
+                                    success = self.signal_generator.generate_exit_signal()
                                     if success:
-                                        self.daily_trades += 1
-                                        # Mark trade as executed in analysis manager
-                                        self.analysis_manager.mark_trade_executed(primary)
-                                        logger.info(f"SIGNAL WRITTEN TO CSV: {primary} trade signal saved")
-                                    else:
-                                        logger.warning(f"SIGNAL GENERATION FAILED: Could not write to CSV")
+                                        self.open_position = None
+                                        logger.warning("EXIT WRITTEN TO CSV — NinjaTrader will close position")
                                 except Exception as e:
-                                    logger.error(f"ERROR WRITING SIGNAL: {e}")
+                                    logger.error(f"ERROR WRITING EXIT SIGNAL: {e}")
+
+                            elif primary != 'NONE' and not self.open_position:
+                                # Hard HTF trend gate — block counter-trend signals at signal layer
+                                htf_bias_value = htf_bias.get('bias', 'unknown')
+                                neutral_threshold = self.config.get('trading_params', {}).get('confidence_threshold', 0.65)
+                                chosen_setup = decision_data['long_setup'] if primary == 'LONG' else decision_data['short_setup']
+                                setup_confidence = chosen_setup.get('confidence', 0.0)
+
+                                htf_blocked = False
+                                if htf_bias_value == 'bullish' and primary == 'SHORT':
+                                    logger.info(f"HTF gate: blocked SHORT — 1H bias is BULLISH")
+                                    htf_blocked = True
+                                elif htf_bias_value == 'bearish' and primary == 'LONG':
+                                    logger.info(f"HTF gate: blocked LONG — 1H bias is BEARISH")
+                                    htf_blocked = True
+                                elif htf_bias_value == 'neutral' and setup_confidence < 0.75:
+                                    logger.info(f"HTF gate: blocked {primary} — neutral HTF requires confidence >= 0.75 (got {setup_confidence:.2f})")
+                                    htf_blocked = True
+
+                                if not htf_blocked:
+                                    confidence = chosen_setup.get('confidence', 0.65)
+
+                                    # Deterministic setup quality gate (Pass 4)
+                                    quality = compute_setup_quality(
+                                        direction=primary,
+                                        fvg_context=fvg_context,
+                                        market_data=market_data,
+                                        htf_bias=htf_bias.get('bias', 'unknown'),
+                                        session_active=True,
+                                        gamma_loader=self.gamma,
+                                        order_flow_context=of_context,
+                                        dom_context=dom_context,
+                                    )
+                                    if not quality['gate_pass']:
+                                        logger.info(f"Quality gate blocked {primary}: score={quality['score']:.2f} — {quality['description']}")
+                                        htf_blocked = True  # reuse flag to skip signal
+                                    sizing = self.position_sizer.compute_trade_sizing(
+                                        direction=primary,
+                                        entry=chosen_setup['entry'],
+                                        stop=chosen_setup['stop'],
+                                        target=chosen_setup['target'],
+                                        confidence=confidence
+                                    )
+
+                                    signal = {
+                                        'decision': primary,
+                                        'entry': chosen_setup['entry'],
+                                        'stop': chosen_setup['stop'],
+                                        'target': chosen_setup['target'],
+                                        'risk_reward': chosen_setup['risk_reward'],
+                                        'confidence': confidence,
+                                        'reasoning': decision_data['overall_reasoning'],
+                                        'setup_type': chosen_setup.get('setup_type', 'fvg_only'),
+                                        'ema21_at_entry': market_data.get('ema21', 0),
+                                        **sizing
+                                    }
+
+                                    logger.info(f"GENERATING TRADE SIGNAL: {primary} @ {signal['entry']:.0f}")
+                                    logger.info(f"R:R {signal['risk_reward']:.2f}:1 | Confidence: {signal['confidence']:.2f}")
+
+                                    try:
+                                        success = self.signal_generator.generate_signal(signal)
+                                        if success:
+                                            self.daily_trades += 1
+                                            self.analysis_manager.mark_trade_executed(primary)
+                                            self.open_position = {
+                                                'direction': primary,
+                                                'entry': chosen_setup['entry'],
+                                                'stop': chosen_setup['stop'],
+                                                'target': chosen_setup['target'],
+                                                'setup_type': chosen_setup.get('setup_type', 'unknown'),
+                                                'confidence': confidence,
+                                                'ema21_at_entry': market_data.get('ema21', 0),
+                                                'bars_in_trade': 0,
+                                            }
+                                            self._completed_trade_count = self._count_completed_trades()
+                                            logger.info(f"SIGNAL WRITTEN: {primary} @ {signal['entry']:.0f} | position tracking active")
+                                            self.notifier.on_entry(
+                                                direction=primary,
+                                                entry=signal['entry'],
+                                                stop=signal['stop'],
+                                                target=signal['target'],
+                                                confidence=signal['confidence'],
+                                                setup_type=signal.get('setup_type', 'unknown'),
+                                                source='Claude',
+                                                contracts=signal.get('contracts', 1),
+                                            )
+                                        else:
+                                            logger.warning("SIGNAL GENERATION FAILED")
+                                    except Exception as e:
+                                        logger.error(f"ERROR WRITING SIGNAL: {e}")
                                     import traceback
                                     logger.error(traceback.format_exc())
+
+                            elif primary != 'NONE' and self.open_position:
+                                logger.info(f"Signal {primary} ignored — already in {self.open_position['direction']} position")
                             else:
                                 logger.info("NO TRADE: Primary decision is NONE")
                         else:
@@ -355,16 +536,19 @@ class TradingOrchestrator:
                         logger.error(f"ERROR IN ANALYSIS: {e}")
                         import traceback
                         logger.error(traceback.format_exc())
-                        # Create error result so display doesn't crash
                         last_result = {
                             'success': False,
                             'error': str(e),
                             'decision': {}
                         }
+                    finally:
+                        self.watchdog.resume()  # Always resume watchdog after Claude finishes
 
                     # Clear screen and show response
                     os.system('cls' if os.name == 'nt' else 'clear')
                     print(self.trading_agent.format_decision_display(result, current_price))
+                    if self.open_position:
+                        print(f"\n[POSITION OPEN] {self.open_position['direction']} @ {self.open_position['entry']:.2f} | Bars: {self.open_position['bars_in_trade']}")
                     print("\nWaiting for next bar")
 
                     # Brief pause to show result
@@ -388,6 +572,7 @@ class TradingOrchestrator:
                     time.sleep(5)
 
         except KeyboardInterrupt:
+            self.watchdog.stop()
             logger.info("\nLive trading stopped by user")
         except Exception as e:
             logger.error(f"Error in live trading: {e}")

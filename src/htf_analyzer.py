@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class HTFAnalyzer:
-    """Computes higher-timeframe trend bias from a 4H OHLC CSV"""
+    """Computes higher-timeframe trend bias from a 1H OHLC CSV"""
 
     def __init__(self, htf_path: str = "data/HistoricalData_4H.csv", ema_fast: int = 8, ema_slow: int = 21):
         self.htf_path = Path(htf_path)
@@ -60,24 +60,49 @@ class HTFAnalyzer:
         bar_time  = last['DateTime']
 
         # Bias from EMA alignment
+        # EMA bias
         if ema_fast > ema_slow * 1.001:
-            bias = 'bullish'
-            bias_str = f"BULLISH — EMA{self.ema_fast} ({ema_fast:.2f}) above EMA{self.ema_slow} ({ema_slow:.2f})"
-            advice = "Favor LONG setups; SHORT only on very high-confluence FVGs against the trend."
+            ema_bias = 'bullish'
+            ema_str  = f"EMA{self.ema_fast} ({ema_fast:.2f}) above EMA{self.ema_slow} ({ema_slow:.2f})"
         elif ema_fast < ema_slow * 0.999:
-            bias = 'bearish'
-            bias_str = f"BEARISH — EMA{self.ema_fast} ({ema_fast:.2f}) below EMA{self.ema_slow} ({ema_slow:.2f})"
-            advice = "Favor SHORT setups; LONG only on very high-confluence FVGs against the trend."
+            ema_bias = 'bearish'
+            ema_str  = f"EMA{self.ema_fast} ({ema_fast:.2f}) below EMA{self.ema_slow} ({ema_slow:.2f})"
         else:
-            bias = 'neutral'
-            bias_str = f"NEUTRAL — EMA{self.ema_fast} ({ema_fast:.2f}) ≈ EMA{self.ema_slow} ({ema_slow:.2f})"
-            advice = "No strong directional bias — require extra confluence before entering either direction."
+            ema_bias = 'neutral'
+            ema_str  = f"EMA{self.ema_fast} ({ema_fast:.2f}) ~ EMA{self.ema_slow} ({ema_slow:.2f})"
+
+        # Structure bias (HH/HL vs LH/LL)
+        struct_bias = self.get_structure_bias(df)
+        struct_str  = {
+            'bullish': 'HH + HL (bullish structure)',
+            'bearish': 'LH + LL (bearish structure)',
+            'neutral': 'Mixed structure (transitioning)',
+            'unknown': 'Insufficient data',
+        }.get(struct_bias, 'unknown')
+
+        # Combined bias — both must agree for strong signal
+        if ema_bias == 'bullish' and struct_bias == 'bullish':
+            bias    = 'bullish'
+            advice  = "Strong BULLISH confluence — EMA and structure aligned. Favor LONGs."
+        elif ema_bias == 'bearish' and struct_bias == 'bearish':
+            bias    = 'bearish'
+            advice  = "Strong BEARISH confluence — EMA and structure aligned. Favor SHORTs."
+        elif ema_bias == 'bullish' or struct_bias == 'bullish':
+            bias    = 'bullish'
+            advice  = "Mild BULLISH bias — only one signal aligned. Require extra confluence."
+        elif ema_bias == 'bearish' or struct_bias == 'bearish':
+            bias    = 'bearish'
+            advice  = "Mild BEARISH bias — only one signal aligned. Require extra confluence."
+        else:
+            bias    = 'neutral'
+            advice  = "No directional bias — EMA and structure both neutral. Require high confluence."
 
         prompt_section = (
-            f"4H HIGHER TIMEFRAME BIAS:\n"
-            f"  Last 4H bar: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
-            f"  Trend: {bias_str}\n"
-            f"  Guidance: {advice}\n"
+            f"1H HIGHER TIMEFRAME BIAS:\n"
+            f"  Last 1H bar: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
+            f"  EMA bias:       {ema_str}\n"
+            f"  Structure bias: {struct_str}\n"
+            f"  Combined:       {bias.upper()} — {advice}\n"
         )
 
         return {
@@ -112,6 +137,44 @@ class HTFAnalyzer:
         except Exception as e:
             logger.warning(f"HTF resample error: {e}")
             return None
+
+    def get_structure_bias(self, df_4h: pd.DataFrame, lookback: int = 6) -> str:
+        """
+        Determines HTF trend direction by comparing recent swing highs and lows.
+        More robust than EMA crossover in choppy/transitioning markets.
+
+        HH + HL = bullish structure
+        LH + LL = bearish structure
+        Mixed   = neutral/transitioning
+        """
+        if df_4h is None or len(df_4h) < lookback + 1:
+            return 'unknown'
+
+        recent = df_4h.tail(lookback)
+        highs  = recent['High'].values if 'High' in recent.columns else recent['Close'].values
+        lows   = recent['Low'].values  if 'Low'  in recent.columns else recent['Close'].values
+
+        # Split into two halves and compare
+        mid    = lookback // 2
+        early_high = highs[:mid].max()
+        late_high  = highs[mid:].max()
+        early_low  = lows[:mid].min()
+        late_low   = lows[mid:].min()
+
+        hh = late_high > early_high   # higher high
+        hl = late_low  > early_low    # higher low
+        lh = late_high < early_high   # lower high
+        ll = late_low  < early_low    # lower low
+
+        if hh and hl:
+            return 'bullish'
+        if lh and ll:
+            return 'bearish'
+        if hh and ll:
+            return 'neutral'  # expanding range
+        if lh and hl:
+            return 'neutral'  # contracting range
+        return 'neutral'
 
     def get_bias_at_bar(self, df_4h: pd.DataFrame, bar_dt: pd.Timestamp) -> str:
         """

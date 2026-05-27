@@ -27,7 +27,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             else if (State == State.Configure)
             {
-                filePath = @"C:\Users\Joshua\Documents\Projects\Claude Trader\data\LiveFeed.csv";
+                filePath = @"C:\Users\jwmar\Claude-Trader-NinjaTrader\data\LiveFeed.csv";
             }
         }
 
@@ -73,9 +73,10 @@ namespace NinjaTrader.NinjaScript.Strategies
                 if (Time.Count == 0 || Open.Count == 0 || High.Count == 0 || Low.Count == 0 || Close.Count == 0)
                     return;
 
-                // Write current price tick to file
-                using (StreamWriter writer = new StreamWriter(filePath, true))
+                // Overwrite on every tick — only last price matters, no accumulation
+                using (StreamWriter writer = new StreamWriter(filePath, false))
                 {
+                    writer.WriteLine("DateTime,Last");
                     writer.WriteLine(
                         $"{DateTime.Now:MM/dd/yyyy HH:mm:ss},{Close[0]:F2}"
                     );

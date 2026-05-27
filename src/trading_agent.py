@@ -138,7 +138,8 @@ class TradingAgent:
         market_data: Dict[str, Any],
         memory_context: Optional[Dict[str, Any]] = None,
         previous_analysis: Optional[str] = None,
-        htf_context: Optional[str] = None
+        htf_context: Optional[str] = None,
+        open_position: Optional[Dict[str, Any]] = None
     ) -> str:
         """
         Build Claude prompt for trade analysis
@@ -231,6 +232,62 @@ If you identified no setup previously and still see no setup:
 
         if htf_context:
             prompt += f"\n{htf_context}\n"
+
+        # Inject open position context — critical for thesis management
+        if open_position:
+            direction  = open_position['direction']
+            entry      = open_position['entry']
+            stop       = open_position['stop']
+            target     = open_position['target']
+            setup_type = open_position.get('setup_type', 'unknown')
+            ema21_entry = open_position.get('ema21_at_entry', 0)
+            bars_held  = open_position.get('bars_in_trade', 0)
+            current_ema21 = market_data.get('ema21', 0)
+            current_price = fvg_context['current_price']
+
+            ema_status = ""
+            if direction == 'LONG' and current_ema21 > 0:
+                ema_status = f"EMA21 now at {current_ema21:.2f} — price is {'ABOVE' if current_price > current_ema21 else 'BELOW'} EMA21"
+            elif direction == 'SHORT' and current_ema21 > 0:
+                ema_status = f"EMA21 now at {current_ema21:.2f} — price is {'BELOW' if current_price < current_ema21 else 'ABOVE'} EMA21"
+
+            prompt += f"""
+OPEN POSITION — THESIS CHECK REQUIRED:
+=======================================
+YOU ARE CURRENTLY IN A {direction} TRADE. Do NOT look for new entries.
+Your ONLY job this bar is to evaluate whether the trade thesis is still valid.
+
+  Entry:      {entry:.2f}
+  Stop Loss:  {stop:.2f}
+  Target:     {target:.2f}
+  Setup Type: {setup_type}
+  EMA21 at Entry: {ema21_entry:.2f}
+  Bars Held:  {bars_held}
+  {ema_status}
+
+THESIS INVALIDATION RULES — set primary_decision to "EXIT" if ANY of these are true:
+  - {direction} EMA_BOUNCE trade: price has CLOSED BELOW EMA21 (for LONG) or ABOVE EMA21 (for SHORT)
+  - Two or more consecutive bars have closed beyond the EMA level
+  - Price structure has fundamentally broken (e.g. lower lows forming in a LONG)
+  - The reason you entered no longer exists
+
+If the thesis is still valid, set primary_decision to "NONE" and explain why you're staying in.
+DO NOT set primary_decision to LONG or SHORT while in this position.
+
+"""
+
+        # Inject reversal confirmation status
+        long_conf  = fvg_context.get('long_confirmation')
+        short_conf = fvg_context.get('short_confirmation')
+        if long_conf or short_conf:
+            prompt += "\nZONE REVERSAL CONFIRMATION:\n"
+            if long_conf:
+                status = "CONFIRMED" if long_conf['confirmed'] else "NOT CONFIRMED"
+                prompt += f"  LONG setup: {status} — {long_conf['reason']}\n"
+            if short_conf:
+                status = "CONFIRMED" if short_conf['confirmed'] else "NOT CONFIRMED"
+                prompt += f"  SHORT setup: {status} — {short_conf['reason']}\n"
+            prompt += "  NOTE: Only set status 'ready' if confirmation is CONFIRMED or you have other strong confluence.\n\n"
 
         prompt += f"""
 CURRENT MARKET CONTEXT (NEW BAR):
@@ -364,11 +421,44 @@ Average R/R: {stats['avg_rr']:.2f}:1
         prompt += f"""
 DECISION CRITERIA:
 ==================
-- Minimum Risk/Reward: {self.min_risk_reward}:1
+- Minimum Risk/Reward: {self.min_risk_reward}:1 (calculated from actual prices — not self-reported)
 - Stop Loss Range: {self.stop_loss_min}-{self.stop_loss_max} points
-- Recommended Stop: {self.stop_loss_default} points (NQ appropriate)
-- Stop Buffer: {self.stop_buffer} points beyond FVG zone
 - Confidence Threshold: {self.confidence_threshold}
+
+STOP LOSS PHILOSOPHY — DYNAMIC, STRUCTURE-BASED:
+=================================================
+Stops are placed at the level where the trade thesis is DEFINITIVELY WRONG.
+Never use a fixed default. Size each stop to the current structure and setup type.
+
+STEP 1 — Identify the invalidation level for this specific trade right now:
+  FVG_FILL SHORT: The thesis breaks if price reclaims the level it was rejected from.
+    → Stop = nearest resistance ABOVE entry (nearest psychological level, nearest EMA above, or recent swing high) + 5pt buffer.
+    → If entry is within 15pts of a psych level: stop = psych_level + 5pts.
+    → If no clear level nearby: stop = entry + (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
+
+  FVG_FILL LONG: The thesis breaks if price loses the support it bounced from.
+    → Stop = nearest support BELOW entry (nearest psychological level, nearest EMA below, or recent swing low) - 5pt buffer.
+    → If entry is within 15pts of a psych level: stop = psych_level - 5pts.
+    → If no clear level nearby: stop = entry - (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
+
+  EMA_BOUNCE LONG: Stop = EMA that price bounced from - 10pts.
+  EMA_BOUNCE SHORT: Stop = EMA that price bounced from + 10pts.
+
+  LEVEL_TRADE: Stop = the key level ± 10pts (beyond the level being traded).
+
+  MOMENTUM / COUNTER_TREND: Stop = most recent swing high (SHORT) or swing low (LONG) + 5pt buffer.
+
+STEP 2 — Verify the math before committing:
+  risk  = abs(entry - stop)
+  reward = abs(target - entry)
+  R/R   = reward / risk
+
+  If R/R < {self.min_risk_reward}: DO NOT take the trade. Do not argue exceptions.
+  If R/R ≥ {self.min_risk_reward}: setup is valid.
+
+STEP 3 — Report the stop you calculated, not a rounded guess.
+  The risk_reward field in your JSON MUST match abs(target - entry) / abs(stop - entry) exactly.
+  Do not write a different number in risk_reward than your math produces.
 
 ANALYSIS REQUIRED:
 ==================
@@ -386,25 +476,20 @@ For EACH assessment (long and short):
    - Entry price: Current price or nearby entry level
    - Raw Target: Your identified target level BEFORE buffer
    - Final Target: Apply 5pt buffer (LONG: raw - 5, SHORT: raw + 5)
-   - Stop loss: 20-50 points based on setup and volatility
-   - Risk/Reward ratio: Using (Final Target - Entry) / (Entry - Stop), min {self.min_risk_reward}:1
+   - Stop loss: Structure-based per the rules above — NOT a fixed number
+   - Risk/Reward ratio: reward / risk using your actual prices — must match exactly
    - Confidence level (0.0-1.0)
-   - Reasoning: Explain setup type, why chosen, confluence factors
+   - Reasoning: Identify the invalidation level, explain stop placement, show R/R math
 3. If status is "none", explain why no setup exists
 
 Update Your Assessment Based On:
 - What changed from previous analysis?
+- Has the invalidation level shifted?
 - FVG quality and proximity
 - EMA trend alignment
-- Stochastic momentum confirmation
+- Stochastic momentum direction and level
 - How long you've been tracking this setup (setup_age_bars)
 - Whether you should keep waiting or abandon the setup
-
-STOP LOSS PHILOSOPHY:
-- Wider stops (30-50 points) allow breathing room
-- Base stop distance on target distance, NOT on tight technical levels
-- Getting stopped out frequently is worse than larger stop size
-- Protect against extended moves, not normal volatility
 
 Respond in JSON format:
 {{
@@ -436,7 +521,7 @@ Respond in JSON format:
         "reasoning": "<explain setup type, confluence, why chosen>"
     }},
 
-    "primary_decision": "LONG" | "SHORT" | "NONE",
+    "primary_decision": "LONG" | "SHORT" | "NONE" | "EXIT",
     "overall_reasoning": "<incremental update: what changed from previous bar, should we trade or continue waiting>",
 
     "long_setup": {{
@@ -568,8 +653,8 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
                 if field not in setup:
                     return False, f"Missing field in {setup_name}: {field}"
 
-        # If no trade, validation passes
-        if decision['primary_decision'] == 'NONE':
+        # EXIT and NONE always pass validation
+        if decision['primary_decision'] in ('NONE', 'EXIT'):
             return True, None
 
         # Get the chosen setup
@@ -581,9 +666,11 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         stop_distance = abs(entry - stop)
 
         if stop_distance < self.stop_loss_min:
+            logger.warning(f"STOP REJECTED (too tight): {stop_distance:.2f}pts < {self.stop_loss_min}pt min | entry={entry} stop={stop}")
             return False, f"Stop loss too tight: {stop_distance:.2f}pts (min: {self.stop_loss_min}pts)"
 
         if stop_distance > self.stop_loss_max:
+            logger.warning(f"STOP REJECTED (too wide): {stop_distance:.2f}pts > {self.stop_loss_max}pt max | entry={entry} stop={stop} — consider raising stop_loss_max in config")
             return False, f"Stop loss too wide: {stop_distance:.2f}pts (max: {self.stop_loss_max}pts)"
 
         # Validate stop direction
@@ -593,9 +680,14 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         if decision['primary_decision'] == 'SHORT' and stop <= entry:
             return False, "Invalid SHORT stop: stop must be above entry"
 
-        # Validate risk/reward
-        if chosen_setup['risk_reward'] < self.min_risk_reward:
-            return False, f"Risk/reward too low: {chosen_setup['risk_reward']:.2f} (min: {self.min_risk_reward})"
+        # Recalculate R/R from actual prices — do not trust Claude's self-reported value
+        target = chosen_setup['target']
+        actual_risk = abs(entry - stop)
+        actual_reward = abs(target - entry)
+        actual_rr = actual_reward / actual_risk if actual_risk > 0 else 0
+
+        if actual_rr < self.min_risk_reward:
+            return False, f"Risk/reward too low: {actual_rr:.2f} (min: {self.min_risk_reward})"
 
         # Validate confidence
         if chosen_setup['confidence'] < self.confidence_threshold:
@@ -609,7 +701,8 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         market_data: Dict[str, Any],
         memory_context: Optional[Dict[str, Any]] = None,
         previous_analysis: Optional[str] = None,
-        htf_context: Optional[str] = None
+        htf_context: Optional[str] = None,
+        open_position: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Main analysis method - queries Claude for trading decision
@@ -624,7 +717,7 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
             Decision dictionary with validation status
         """
         # Build prompt
-        prompt = self.build_prompt(fvg_context, market_data, memory_context, previous_analysis, htf_context)
+        prompt = self.build_prompt(fvg_context, market_data, memory_context, previous_analysis, htf_context, open_position)
 
         try:
             # Show full prompt (debug only)

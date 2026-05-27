@@ -4,12 +4,13 @@
     "bars_per_day": 96
   },
   "trading_params": {
-    "min_gap_size": 2.0,
-    "max_gap_age_bars": 1000,
-    "min_risk_reward": 1.3,
+    "min_gap_size": 5.0,
+    "max_gap_age_bars": 96,
+    "min_risk_reward": 2.5,
     "confidence_threshold": 0.65,
     "min_setup_age_bars": 1,
-    "position_size": 1
+    "position_size": 1,
+    "watchdog_touch_pts": 8.0
   },
   "position_sizing": {
     "base_contracts": 1,
@@ -40,7 +41,7 @@
     "max_consecutive_losses": 3
   },
   "levels": {
-    "psychological_intervals": [1000],
+    "psychological_intervals": [100],
     "confluence_tolerance": 10.0,
     "track_historical_strength": true
   },
@@ -50,7 +51,7 @@
     "enable_adaptive_learning": true
   },
   "claude": {
-    "model": "claude-haiku-4-5-20251001",
+    "model": "claude-sonnet-4-6",
     "temperature": 0.3,
     "max_tokens": 2000
   },
@@ -62,11 +63,27 @@
   },
   "session_rules": {
     "enabled": true,
-    "allowed_sessions": ["ny_open", "london_overlap"],
-    "ny_open_start": "09:30",
-    "ny_open_end": "16:00",
-    "london_start": "03:00",
-    "london_end": "12:00",
+    "allowed_sessions": ["ny_open", "london", "asian"],
+    "ny_open": {
+      "enabled": true,
+      "start": "09:30",
+      "end": "16:00",
+      "description": "New York main session"
+    },
+    "london": {
+      "enabled": true,
+      "start": "03:00",
+      "end": "12:00",
+      "description": "London/European session"
+    },
+    "asian": {
+      "enabled": true,
+      "start": "18:00",
+      "end": "02:00",
+      "description": "Asian/overnight session (crosses midnight)"
+    },
+    "avoid_ny_open": true,
+    "ny_open_blackout_minutes": 30,
     "avoid_lunch": true,
     "lunch_start": "12:00",
     "lunch_end": "13:00"

@@ -4,7 +4,7 @@ Parses Fair Value Gap data and prepares it for Claude analysis
 """
 
 import logging
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any  # noqa: F401
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -206,13 +206,78 @@ class FVGAnalyzer:
 
         return filtered
 
-    def analyze_market_context(self, current_price: float, active_fvgs: List[Dict]) -> Dict[str, Any]:
+    def check_reversal_confirmation(
+        self,
+        recent_bars: List[Dict],
+        direction: str,
+        zone_bottom: float,
+        zone_top: float
+    ) -> Dict[str, Any]:
         """
-        Complete market analysis combining all FVG data
+        Check if recent bar closes show rejection/confirmation at the zone.
+        For a LONG (bearish FVG above): need a bullish close inside or at zone bottom.
+        For a SHORT (bullish FVG below): need a bearish close inside or at zone top.
+
+        Args:
+            recent_bars: Last 1-2 bars as dicts with Open, High, Low, Close keys
+            direction: 'LONG' or 'SHORT'
+            zone_bottom: FVG zone bottom price
+            zone_top: FVG zone top price
+
+        Returns:
+            Dict with 'confirmed' bool and 'reason' string
+        """
+        if not recent_bars:
+            return {'confirmed': False, 'reason': 'No bars to evaluate'}
+
+        last = recent_bars[-1]
+        o, h, l, c = last.get('Open', 0), last.get('High', 0), last.get('Low', 0), last.get('Close', 0)
+
+        touched_zone    = l <= zone_top and h >= zone_bottom  # bar touched the zone
+
+        if direction == 'LONG':
+            # Bullish confirmation: bar touched zone AND closed bullish (close > open)
+            # OR bar wicked into zone and closed back above zone bottom
+            bullish_close   = c > o
+            closed_above    = c >= zone_bottom
+            wick_rejection  = l <= zone_bottom and c > zone_bottom
+
+            if touched_zone and bullish_close and closed_above:
+                return {'confirmed': True,  'reason': f'Bullish close ({o:.2f}→{c:.2f}) at zone {zone_bottom:.2f}-{zone_top:.2f}'}
+            if wick_rejection:
+                return {'confirmed': True,  'reason': f'Wick rejection at zone bottom {zone_bottom:.2f}, closed above at {c:.2f}'}
+            if touched_zone and not bullish_close:
+                return {'confirmed': False, 'reason': f'Bearish close inside zone — no confirmation yet'}
+            return {'confirmed': False, 'reason': 'Zone not yet touched by price'}
+
+        else:  # SHORT
+            # Bearish confirmation: bar touched zone AND closed bearish (close < open)
+            # OR bar wicked into zone and closed back below zone top
+            bearish_close   = c < o
+            closed_below    = c <= zone_top
+            wick_rejection  = h >= zone_top and c < zone_top
+
+            if touched_zone and bearish_close and closed_below:
+                return {'confirmed': True,  'reason': f'Bearish close ({o:.2f}→{c:.2f}) at zone {zone_bottom:.2f}-{zone_top:.2f}'}
+            if wick_rejection:
+                return {'confirmed': True,  'reason': f'Wick rejection at zone top {zone_top:.2f}, closed below at {c:.2f}'}
+            if touched_zone and not bearish_close:
+                return {'confirmed': False, 'reason': 'Bullish close inside zone — no confirmation yet'}
+            return {'confirmed': False, 'reason': 'Zone not yet touched by price'}
+
+    def analyze_market_context(
+        self,
+        current_price: float,
+        active_fvgs: List[Dict],
+        recent_bars: Optional[List[Dict]] = None
+    ) -> Dict[str, Any]:
+        """
+        Complete market analysis combining all FVG data.
 
         Args:
             current_price: Current market price
             active_fvgs: List of active FVG zones
+            recent_bars: Last 1-2 closed bars for reversal confirmation check
 
         Returns:
             Complete market context dictionary
@@ -229,6 +294,21 @@ class FVGAnalyzer:
         # Check if price is in any zone
         active_zone = self.find_active_zone(current_price, quality_zones)
 
+        # Reversal confirmation at nearest zones (if bar data provided)
+        long_confirmation  = None
+        short_confirmation = None
+        if recent_bars:
+            if nearest['nearest_bearish']:
+                fvg = nearest['nearest_bearish']
+                long_confirmation = self.check_reversal_confirmation(
+                    recent_bars, 'LONG', fvg['bottom'], fvg['top']
+                )
+            if nearest['nearest_bullish']:
+                fvg = nearest['nearest_bullish']
+                short_confirmation = self.check_reversal_confirmation(
+                    recent_bars, 'SHORT', fvg['bottom'], fvg['top']
+                )
+
         context = {
             'current_price': current_price,
             'timestamp': datetime.now().isoformat(),
@@ -237,7 +317,9 @@ class FVGAnalyzer:
             'nearest_bullish_fvg': nearest['nearest_bullish'],
             'nearest_bearish_fvg': nearest['nearest_bearish'],
             'price_in_zone': active_zone,
-            'all_fvgs': quality_zones
+            'all_fvgs': quality_zones,
+            'long_confirmation': long_confirmation,
+            'short_confirmation': short_confirmation,
         }
 
         logger.info(f"Market context analyzed: Price={current_price:.2f}, "

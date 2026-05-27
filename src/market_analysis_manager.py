@@ -219,10 +219,10 @@ class MarketAnalysisManager:
         lines.append(f"  Status: {long.get('status', 'none').upper()}")
         if long.get('status') != 'none':
             lines.append(f"  Setup Age: {long.get('setup_age_bars', 0)} bars")
-            lines.append(f"  Entry Plan: {long.get('entry_plan', 0):.2f}")
-            lines.append(f"  Stop Plan: {long.get('stop_plan', 0):.2f}")
-            lines.append(f"  Target Plan: {long.get('target_plan', 0):.2f}")
-            lines.append(f"  Confidence: {long.get('confidence', 0):.2f}")
+            lines.append(f"  Entry Plan: {long.get('entry_plan') or 0:.2f}")
+            lines.append(f"  Stop Plan: {long.get('stop_plan') or 0:.2f}")
+            lines.append(f"  Target Plan: {long.get('target_plan') or 0:.2f}")
+            lines.append(f"  Confidence: {long.get('confidence') or 0:.2f}")
             lines.append(f"  Reasoning: {long.get('reasoning', 'N/A')}")
         else:
             lines.append(f"  {long.get('reasoning', 'No setup')}")
@@ -234,10 +234,10 @@ class MarketAnalysisManager:
         lines.append(f"  Status: {short.get('status', 'none').upper()}")
         if short.get('status') != 'none':
             lines.append(f"  Setup Age: {short.get('setup_age_bars', 0)} bars")
-            lines.append(f"  Entry Plan: {short.get('entry_plan', 0):.2f}")
-            lines.append(f"  Stop Plan: {short.get('stop_plan', 0):.2f}")
-            lines.append(f"  Target Plan: {short.get('target_plan', 0):.2f}")
-            lines.append(f"  Confidence: {short.get('confidence', 0):.2f}")
+            lines.append(f"  Entry Plan: {short.get('entry_plan') or 0:.2f}")
+            lines.append(f"  Stop Plan: {short.get('stop_plan') or 0:.2f}")
+            lines.append(f"  Target Plan: {short.get('target_plan') or 0:.2f}")
+            lines.append(f"  Confidence: {short.get('confidence') or 0:.2f}")
             lines.append(f"  Reasoning: {short.get('reasoning', 'N/A')}")
         else:
             lines.append(f"  {short.get('reasoning', 'No setup')}")
