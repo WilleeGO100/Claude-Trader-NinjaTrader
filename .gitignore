@@ -56,3 +56,7 @@ Thumbs.db
 backtest_results.json
 test_results/
 .venv/
+debug_backtest.py
+debug_fvg.py
+verify_passes.py
+verify_phase1.py
