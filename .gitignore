@@ -55,3 +55,4 @@ Thumbs.db
 # Test outputs
 backtest_results.json
 test_results/
+.venv/
