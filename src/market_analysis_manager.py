@@ -66,6 +66,18 @@ class MarketAnalysisManager:
             "bars_since_last_update": 0
         }
 
+    def _is_stale(self, analysis: Dict[str, Any]) -> bool:
+        """Returns True if analysis is from a previous trading day (>8 hours old)"""
+        last_updated = analysis.get('last_updated', '')
+        if not last_updated:
+            return True
+        try:
+            updated_dt = datetime.fromisoformat(last_updated)
+            age_hours = (datetime.now() - updated_dt).total_seconds() / 3600
+            return age_hours > 8
+        except Exception:
+            return True
+
     def _load_analysis(self) -> Dict[str, Any]:
         """
         Load existing analysis from file or create new
@@ -77,8 +89,11 @@ class MarketAnalysisManager:
             try:
                 with open(self.analysis_file, 'r') as f:
                     analysis = json.load(f)
-                    logger.info(f"Loaded existing analysis (last updated: {analysis.get('last_updated')})")
-                    return analysis
+                if self._is_stale(analysis):
+                    logger.info(f"Analysis from {analysis.get('last_updated')} is stale — starting fresh")
+                    return self._get_empty_analysis()
+                logger.info(f"Loaded existing analysis (last updated: {analysis.get('last_updated')})")
+                return analysis
             except Exception as e:
                 logger.warning(f"Failed to load analysis file: {e}. Creating new analysis.")
                 return self._get_empty_analysis()

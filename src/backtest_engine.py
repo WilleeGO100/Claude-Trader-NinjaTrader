@@ -14,6 +14,10 @@ from .fvg_analyzer import FVGAnalyzer
 from .level_detector import LevelDetector
 from .trading_agent import TradingAgent
 from .memory_manager import MemoryManager
+from .session_filter import SessionFilter
+from .news_filter import NewsFilter
+from .position_sizer import PositionSizer
+from .htf_analyzer import HTFAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,10 @@ class BacktestEngine:
             level_intervals=config['levels']['psychological_intervals']
         )
         self.memory_manager = MemoryManager()
+        self.session_filter = SessionFilter(config)
+        self.news_filter = NewsFilter(config)
+        self.position_sizer = PositionSizer(config)
+        self.htf_analyzer = HTFAnalyzer()
 
         # Note: TradingAgent requires API key, will initialize in run()
 
@@ -66,13 +74,29 @@ class BacktestEngine:
         """
         logger.info(f"Loading historical data from {self.historical_data_path}")
 
+        if not self.historical_data_path.exists():
+            raise FileNotFoundError(
+                f"HistoricalData.csv not found at {self.historical_data_path}. "
+                "Apply SecondHistoricalData.cs to an NQ chart in NinjaTrader first."
+            )
+
         df = pd.read_csv(self.historical_data_path)
-        df['DateTime'] = pd.to_datetime(df['DateTime'])
+
+        required_cols = ['DateTime', 'Open', 'High', 'Low', 'Close']
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            raise ValueError(f"HistoricalData.csv missing columns: {missing}")
+
+        df['DateTime'] = pd.to_datetime(df['DateTime'], errors='coerce')
+        df = df.dropna(subset=['DateTime', 'Close'])
         df = df.sort_values('DateTime').reset_index(drop=True)
 
+        if len(df) < 50:
+            raise ValueError(f"Only {len(df)} bars in historical data — need at least 50")
+
         if days:
-            # Calculate how many bars = days (assuming 1hr bars, ~24 bars per day)
-            bars_to_load = days * 24
+            bars_per_day = self.config.get('timeframe', {}).get('bars_per_day', 24)
+            bars_to_load = days * bars_per_day
             df = df.tail(bars_to_load)
             logger.info(f"Loaded last {days} days ({len(df)} bars)")
         else:
@@ -143,15 +167,18 @@ class BacktestEngine:
             if fvg['filled']:
                 continue
 
+            # Don't process FVGs that haven't been created yet
+            if fvg['index'] > current_index:
+                continue
+
             # Update age
             fvg['age_bars'] = current_index - fvg['index']
 
-            # Check if filled (only when price touches the FAR side)
-            # Bullish FVG: filled when price goes UP and touches TOP
-            if fvg['type'] == 'bullish' and current_bar['High'] >= fvg['top']:
+            # Bullish FVG (gap up, zone below price): fully filled when price passes down through the bottom
+            if fvg['type'] == 'bullish' and current_bar['Low'] <= fvg['bottom']:
                 fvg['filled'] = True
-            # Bearish FVG: filled when price goes DOWN and touches BOTTOM
-            elif fvg['type'] == 'bearish' and current_bar['Low'] <= fvg['bottom']:
+            # Bearish FVG (gap down, zone above price): fully filled when price passes up through the top
+            elif fvg['type'] == 'bearish' and current_bar['High'] >= fvg['top']:
                 fvg['filled'] = True
 
     def get_active_fvgs(self, fvgs: List[Dict], current_index: int) -> List[Dict]:
@@ -182,48 +209,50 @@ class BacktestEngine:
 
     def check_exit_conditions(self, position: Dict, current_bar: pd.Series) -> Optional[Dict]:
         """
-        Check if position should be exited
+        Check if position should be exited. Simulates partial exits and
+        breakeven stop movement when scale1 is hit.
 
-        Args:
-            position: Current position dictionary
-            current_bar: Current bar data
-
-        Returns:
-            Exit data if position closed, None otherwise
+        Returns exit data if fully closed, None otherwise.
+        Mutates position dict in place for scale1 and stop updates.
         """
         entry = position['entry']
         stop = position['stop']
         target = position['target']
         direction = position['direction']
+        scale1_price = position.get('scale1_price', 0)
+        scale1_hit = position.get('scale1_hit', False)
 
-        # Check stop loss
         if direction == 'LONG':
+            # Check if scale1 hit (and not already processed)
+            if scale1_price and not scale1_hit and current_bar['High'] >= scale1_price:
+                position['scale1_hit'] = True
+                # Move stop to breakeven
+                position['stop'] = entry
+                stop = entry
+                logger.info(f"Scale1 hit @ {scale1_price:.2f} — stop moved to breakeven {entry:.2f}")
+
             if current_bar['Low'] <= stop:
-                return {
-                    'exit_price': stop,
-                    'exit_reason': 'stop_loss',
-                    'result': 'LOSS'
-                }
+                reason = 'breakeven' if scale1_hit else 'stop_loss'
+                result = 'BREAKEVEN' if scale1_hit else 'LOSS'
+                return {'exit_price': stop, 'exit_reason': reason, 'result': result}
+
             elif current_bar['High'] >= target:
-                return {
-                    'exit_price': target,
-                    'exit_reason': 'target_hit',
-                    'result': 'WIN'
-                }
+                return {'exit_price': target, 'exit_reason': 'target_hit', 'result': 'WIN'}
 
         elif direction == 'SHORT':
+            if scale1_price and not scale1_hit and current_bar['Low'] <= scale1_price:
+                position['scale1_hit'] = True
+                position['stop'] = entry
+                stop = entry
+                logger.info(f"Scale1 hit @ {scale1_price:.2f} — stop moved to breakeven {entry:.2f}")
+
             if current_bar['High'] >= stop:
-                return {
-                    'exit_price': stop,
-                    'exit_reason': 'stop_loss',
-                    'result': 'LOSS'
-                }
+                reason = 'breakeven' if scale1_hit else 'stop_loss'
+                result = 'BREAKEVEN' if scale1_hit else 'LOSS'
+                return {'exit_price': stop, 'exit_reason': reason, 'result': result}
+
             elif current_bar['Low'] <= target:
-                return {
-                    'exit_price': target,
-                    'exit_reason': 'target_hit',
-                    'result': 'WIN'
-                }
+                return {'exit_price': target, 'exit_reason': 'target_hit', 'result': 'WIN'}
 
         return None
 
@@ -259,10 +288,18 @@ class BacktestEngine:
                 raise ValueError("API key required for Claude-based backtest")
             trading_agent = TradingAgent(self.config, api_key=api_key)
 
+        # Build 4H HTF context from 1H data for backtest
+        df_4h = self.htf_analyzer.resample_from_1h(df)
+        if df_4h is not None:
+            logger.info(f"HTF context: {len(df_4h)} 4H bars resampled")
+        else:
+            logger.info("HTF context unavailable (not enough 1H bars)")
+
         # Track trades
         trades = []
         current_position = None
         bars_in_position = 0
+        previous_analysis = ""  # Carry context between bars like live mode does
 
         # Iterate through bars
         for i in range(3, len(df)):  # Start at bar 3 (need history for FVG detection)
@@ -322,6 +359,15 @@ class BacktestEngine:
             if not active_fvgs:
                 continue
 
+            # News filter only in backtest (session filter skipped — bar timestamps
+            # from NinjaTrader are in local/exchange time, not ET, so it would
+            # block most bars incorrectly. Enable via config if needed.)
+            if self.config.get('session_rules', {}).get('apply_in_backtest', False):
+                bar_dt = current_bar['DateTime'].to_pydatetime() if hasattr(current_bar['DateTime'], 'to_pydatetime') else current_bar['DateTime']
+                session_ok, _ = self.session_filter.is_trading_allowed(bar_dt)
+                if not session_ok:
+                    continue
+
             # Log active FVGs every 50 bars
             if i % 50 == 0:
                 logger.info(f"Bar {i}: {len(active_fvgs)} active FVGs")
@@ -339,25 +385,68 @@ class BacktestEngine:
 
             # Check for trade signals
             if use_claude and trading_agent:
-                # Use Claude for decision (full discretion)
                 memory_context = self.memory_manager.get_memory_context()
-                result = trading_agent.analyze_setup(fvg_context, market_data, memory_context)
 
-                if result['success'] and result['decision']['decision'] != 'NONE':
+                # HTF bias for this bar
+                htf_context = None
+                if df_4h is not None:
+                    bar_dt = current_bar['DateTime']
+                    if hasattr(bar_dt, 'to_pydatetime'):
+                        bar_dt = bar_dt.to_pydatetime()
+                    htf_bias = self.htf_analyzer.get_bias_at_bar(df_4h, bar_dt)
+                    htf_context = f"4H HIGHER TIMEFRAME BIAS: {htf_bias.upper()}\n"
+
+                result = trading_agent.analyze_setup(fvg_context, market_data, memory_context, previous_analysis, htf_context)
+
+                # Update previous analysis context for next bar
+                if result['success'] and result['decision']:
+                    decision_data = result['decision']
+                    previous_analysis = (
+                        f"PREVIOUS BAR ANALYSIS:\n"
+                        f"Bias: {decision_data.get('overall_bias', 'neutral').upper()}\n"
+                        f"Waiting for: {decision_data.get('waiting_for', 'N/A')}\n"
+                        f"Long status: {decision_data.get('long_assessment', {}).get('status', 'none').upper()}\n"
+                        f"Short status: {decision_data.get('short_assessment', {}).get('status', 'none').upper()}\n"
+                        f"Reasoning: {decision_data.get('overall_reasoning', '')[:300]}"
+                    )
+
+                min_age = self.config.get('trading_params', {}).get('min_setup_age_bars', 2)
+                if result['success'] and result['decision'].get('primary_decision', 'NONE') != 'NONE':
                     decision = result['decision']
+                    primary = decision['primary_decision']
+                    chosen_assessment = decision.get('long_assessment' if primary == 'LONG' else 'short_assessment', {})
+                    setup_age = chosen_assessment.get('setup_age_bars', 0)
+                    if setup_age < min_age:
+                        logger.info(f"Bar {i}: {primary} setup too new ({setup_age} bars < {min_age} min) — waiting")
+                        continue
+                    chosen_setup = decision['long_setup'] if primary == 'LONG' else decision['short_setup']
+                    confidence = chosen_setup.get('confidence', 0.65)
+                    sizing = self.position_sizer.compute_trade_sizing(
+                        direction=primary,
+                        entry=chosen_setup['entry'],
+                        stop=chosen_setup['stop'],
+                        target=chosen_setup['target'],
+                        confidence=confidence
+                    )
                     current_position = {
                         'trade_id': f"{current_bar['DateTime']}",
                         'entry_bar': i,
                         'entry_datetime': current_bar['DateTime'],
-                        'direction': decision['decision'],
-                        'entry': decision['entry'],
-                        'stop': decision['stop'],
-                        'target': decision['target'],
-                        'setup_type': decision['setup_type'],
-                        'confidence': decision['confidence'],
-                        'reasoning': decision['reasoning']
+                        'direction': primary,
+                        'entry': chosen_setup['entry'],
+                        'stop': chosen_setup['stop'],
+                        'target': chosen_setup['target'],
+                        'setup_type': 'fvg_only',
+                        'confidence': confidence,
+                        'reasoning': decision.get('overall_reasoning', ''),
+                        'contracts': sizing['contracts'],
+                        'scale1_price': sizing['scale1_price'],
+                        'scale1_contracts': sizing['scale1_contracts'],
+                        'trail_points': sizing['trail_points'],
+                        'scale1_hit': False,
                     }
-                    logger.info(f"Position opened: {decision['decision']} @ {decision['entry']:.2f}")
+                    logger.info(f"Position opened: {primary} @ {chosen_setup['entry']:.2f} ({sizing['contracts']}c)")
+                    previous_analysis = ""  # Reset context after trade entry
 
             else:
                 # Simple logic for testing (without Claude)
@@ -459,18 +548,20 @@ class BacktestEngine:
         bars_held = [t['bars_held'] for t in trades]
         avg_bars = sum(bars_held) / len(trades)
 
-        # By setup type
+        # By setup type — dynamic, covers all types seen in this run
         by_type = {}
-        for setup_type in ['fvg_only', 'level_only']:
+        all_setup_types = set(t.get('setup_type', 'unknown') for t in trades)
+        for setup_type in all_setup_types:
             type_trades = [t for t in trades if t.get('setup_type') == setup_type]
             if type_trades:
                 type_wins = sum(1 for t in type_trades if t['result'] == 'WIN')
+                type_losses = sum(1 for t in type_trades if t['result'] == 'LOSS')
                 type_pnl = sum(t['profit_loss'] for t in type_trades)
                 by_type[setup_type] = {
                     'trades': len(type_trades),
                     'wins': type_wins,
-                    'losses': sum(1 for t in type_trades if t['result'] == 'LOSS'),
-                    'win_rate': type_wins / len(type_trades),
+                    'losses': type_losses,
+                    'win_rate': type_wins / (type_wins + type_losses) if (type_wins + type_losses) > 0 else 0.0,
                     'total_pnl': type_pnl,
                     'avg_pnl': type_pnl / len(type_trades)
                 }

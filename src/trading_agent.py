@@ -32,7 +32,8 @@ class TradingAgent:
             raise ValueError("Anthropic API key required (set ANTHROPIC_API_KEY or pass api_key)")
 
         self.client = Anthropic(api_key=self.api_key)
-        self.model = "claude-sonnet-4-5-20250929"
+        # Env var CLAUDE_MODEL overrides config (useful for quick switching)
+        self.model = os.getenv('CLAUDE_MODEL') or config.get('claude', {}).get('model', 'claude-sonnet-4-6')
 
         # Extract config parameters
         self.min_risk_reward = config.get('trading_params', {}).get('min_risk_reward', 3.0)
@@ -136,7 +137,8 @@ class TradingAgent:
         fvg_context: Dict[str, Any],
         market_data: Dict[str, Any],
         memory_context: Optional[Dict[str, Any]] = None,
-        previous_analysis: Optional[str] = None
+        previous_analysis: Optional[str] = None,
+        htf_context: Optional[str] = None
     ) -> str:
         """
         Build Claude prompt for trade analysis
@@ -226,6 +228,9 @@ If you identified no setup previously and still see no setup:
 - Don't force a trade just because time has passed
 
 """
+
+        if htf_context:
+            prompt += f"\n{htf_context}\n"
 
         prompt += f"""
 CURRENT MARKET CONTEXT (NEW BAR):
@@ -603,7 +608,8 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         fvg_context: Dict[str, Any],
         market_data: Dict[str, Any],
         memory_context: Optional[Dict[str, Any]] = None,
-        previous_analysis: Optional[str] = None
+        previous_analysis: Optional[str] = None,
+        htf_context: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Main analysis method - queries Claude for trading decision
@@ -618,15 +624,15 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
             Decision dictionary with validation status
         """
         # Build prompt
-        prompt = self.build_prompt(fvg_context, market_data, memory_context, previous_analysis)
+        prompt = self.build_prompt(fvg_context, market_data, memory_context, previous_analysis, htf_context)
 
         try:
-            # Show full prompt
-            logger.info("="*60)
-            logger.info("SENDING TO CLAUDE:")
-            logger.info("="*60)
-            logger.info(prompt)
-            logger.info("="*60)
+            # Show full prompt (debug only)
+            logger.debug("="*60)
+            logger.debug("SENDING TO CLAUDE:")
+            logger.debug("="*60)
+            logger.debug(prompt)
+            logger.debug("="*60)
 
             # Show waiting message
             print("\nWaiting for Agent response", end='', flush=True)
@@ -663,15 +669,12 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
             # Extract response text
             response_text = response.content[0].text
 
-            # Show full response
-            logger.info("="*60)
-            logger.info("CLAUDE RESPONSE:")
-            logger.info("="*60)
-            logger.info(response_text)
-            logger.info("="*60)
-
-            # Wait 1 second before continuing
-            time.sleep(1)
+            # Show full response (debug only)
+            logger.debug("="*60)
+            logger.debug("CLAUDE RESPONSE:")
+            logger.debug("="*60)
+            logger.debug(response_text)
+            logger.debug("="*60)
 
             # Parse response
             decision = self.parse_claude_response(response_text)

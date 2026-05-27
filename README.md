@@ -10,7 +10,7 @@ An automated trading strategy for NinjaTrader 8 that receives trade signals from
 
 ### Signal Flow
 ```
-Python/Agent → trade_signals.csv → ClaudeTrader.cs → NinjaTrader Execution
+Python/Agent → trade_signals.csv → ClaudeTrader (2).cs → NinjaTrader Execution
   (generates)      (CSV file)         (NinjaScript)      (broker orders)
 ```
 
@@ -28,7 +28,7 @@ Python/Agent → trade_signals.csv → ClaudeTrader.cs → NinjaTrader Execution
 ## CSV File Format
 
 ### Input: `trade_signals.csv`
-Located at: `C:\Users\Joshua\Documents\Projects\Claude Trader\data\trade_signals.csv`
+Located at: `C:\Users\jwmar\Claude-Trader-NinjaTrader\data\trade_signals.csv`
 
 ```csv
 DateTime,Direction,Entry_Price,Stop_Loss,Take_Profit
@@ -44,7 +44,7 @@ DateTime,Direction,Entry_Price,Stop_Loss,Take_Profit
 - `Take_Profit`: Take profit price (absolute price level)
 
 ### Output: `trades_taken.csv`
-Located at: `C:\Users\Joshua\Documents\Projects\Claude Trader\data\trades_taken.csv`
+Located at: `C:\Users\jwmar\Claude-Trader-NinjaTrader\data\trades_taken.csv`
 
 ```csv
 DateTime,Direction,Entry_Price
@@ -78,7 +78,7 @@ DateTime,Direction,Entry_Price
 
 ### 1. Copy Strategy to NinjaTrader
 ```
-Copy: src/claudetrader.cs
+Copy: ninjascripts/claudetrader (2).cs
 To: Documents\NinjaTrader 8\bin\Custom\Strategies\
 ```
 
@@ -90,7 +90,7 @@ To: Documents\NinjaTrader 8\bin\Custom\Strategies\
 
 ### 3. Create Data Directories
 ```
-C:\Users\Joshua\Documents\Projects\Claude Trader\data\
+C:\Users\jwmar\Claude-Trader-NinjaTrader\data\
   ├── trade_signals.csv    (input - agent writes here)
   └── trades_taken.csv     (output - strategy writes here)
 ```
@@ -137,7 +137,7 @@ DateTime,Direction,Entry_Price,Stop_Loss,Take_Profit
 
 ```
 ClaudeTrader Initialized - Monitoring signals every 2 seconds
-Signals File: C:\Users\Joshua\Documents\Projects\Claude Trader\data\trade_signals.csv
+Signals File: C:\Users\jwmar\Claude-Trader-NinjaTrader\data\trade_signals.csv
 [SIGNAL] LONG LIMIT @ 25100.00 (2 contracts)
   Target SL: 25090.00 | Target TP: 25120.00
 [ORDER UPDATE] CT_Long | State: Submitted | Price: Limit=25100.00, Stop=0 | Qty: 2/0
@@ -166,8 +166,8 @@ Trade logged to file: LONG @ 25100.00
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| Signals File Path | `C:\Users\Joshua\Documents\Projects\Claude Trader\data\trade_signals.csv` | Input signal file |
-| Trades Log File Path | `C:\Users\Joshua\Documents\Projects\Claude Trader\data\trades_taken.csv` | Trade log output |
+| Signals File Path | `C:\Users\jwmar\Claude-Trader-NinjaTrader\data\trade_signals.csv` | Input signal file |
+| Trades Log File Path | `C:\Users\jwmar\Claude-Trader-NinjaTrader\data\trades_taken.csv` | Trade log output |
 | File Check Interval | 2 seconds | How often to check for signals |
 | Contract Quantity | 2 | Number of contracts per trade |
 
@@ -184,8 +184,10 @@ Trade logged to file: LONG @ 25100.00
 
 ```
 Claude Trader/
-├── src/
-│   └── claudetrader.cs          # NinjaScript strategy
+├── ninjascripts/
+│   ├── claudetrader (2).cs          # NinjaScript strategy
+│   ├── SecondHistoricalData (2).cs  # Historical data feed
+│   └── SecondLifeFeed (2).cs        # Live price feed
 ├── data/
 │   ├── trade_signals.csv        # Input: trade signals
 │   └── trades_taken.csv         # Output: executed trades
@@ -306,7 +308,7 @@ BUT chart is screaming SHORT
   1. Identifies potential zone/setup → Status: `WATCHING`
   2. Monitors price action and momentum
   3. **Only** when everything aligns → Status: `READY`
-  4. ClaudeTrader.cs **only acts on `READY` signals**
+  4. ClaudeTrader (2).cs **only acts on `READY` signals**
 
 **Wait For**:
 - Price action confirmation (rejection wicks, engulfing candles, etc.)
@@ -355,7 +357,7 @@ BUT chart is screaming SHORT
 
 ## Support & Documentation
 
-- **Strategy Code**: [src/claudetrader.cs](src/claudetrader.cs)
+- **Strategy Code**: [ninjascripts/claudetrader (2).cs](ninjascripts/claudetrader%20(2).cs)
 - **Agent Setup**: [QUICKSTART.md](QUICKSTART.md)
 - **NinjaTrader Docs**: https://ninjatrader.com/support/helpGuides/nt8/
 

@@ -21,6 +21,11 @@ from src.memory_manager import MemoryManager
 from src.signal_generator import SignalGenerator
 from src.backtest_engine import BacktestEngine
 from src.market_analysis_manager import MarketAnalysisManager
+from src.session_filter import SessionFilter
+from src.news_filter import NewsFilter
+from src.position_sizer import PositionSizer
+from src.analytics import Analytics
+from src.htf_analyzer import HTFAnalyzer
 
 # Load environment variables
 load_dotenv()
@@ -85,6 +90,10 @@ class TradingOrchestrator:
         self.memory_manager = MemoryManager()
         self.signal_generator = SignalGenerator()
         self.analysis_manager = MarketAnalysisManager()
+        self.session_filter = SessionFilter(self.config)
+        self.news_filter = NewsFilter(self.config)
+        self.position_sizer = PositionSizer(self.config)
+        self.htf_analyzer = HTFAnalyzer()
 
         # Trading agent (requires API key)
         api_key = os.getenv('ANTHROPIC_API_KEY')
@@ -143,7 +152,8 @@ class TradingOrchestrator:
         from FairValueGaps import FVGDisplay
 
         # Create FVG display instance (but don't run its main loop)
-        fvg_display = FVGDisplay()
+        min_gap_size = self.config.get('trading_params', {}).get('min_gap_size', 5.0)
+        fvg_display = FVGDisplay(min_gap_size=min_gap_size)
 
         # Load historical FVGs
         fvg_display.load_historical_fvgs()
@@ -174,7 +184,7 @@ class TradingOrchestrator:
                     # Update last processed time
                     last_bar_time = current_bar_time
 
-                    # Check for new hourly bars
+                    # Check for new bars
                     if fvg_display.check_historical_updated():
                         fvg_display.process_historical_bars()
 
@@ -231,6 +241,20 @@ class TradingOrchestrator:
                         'stochastic': current_bar.get('StochD', 50)
                     }
 
+                    # Check session rules (set enabled: false in config to disable)
+                    # session_ok, session_reason = self.session_filter.is_trading_allowed()
+                    # if not session_ok:
+                    #     logger.info(f"Session filter: {session_reason}")
+                    #     time.sleep(60)
+                    #     continue
+
+                    # Check news blackouts
+                    news_ok, news_reason = self.news_filter.is_trading_allowed()
+                    if not news_ok:
+                        logger.warning(f"News filter: {news_reason}")
+                        time.sleep(60)
+                        continue
+
                     # Check risk limits
                     can_trade, reason = self.check_risk_limits()
                     if not can_trade:
@@ -245,12 +269,14 @@ class TradingOrchestrator:
                     previous_analysis = self.analysis_manager.format_previous_analysis_for_prompt()
 
                     # Analyze with Claude (only on new bar)
+                    htf_bias = self.htf_analyzer.get_bias()
                     try:
                         result = self.trading_agent.analyze_setup(
                             fvg_context,
                             market_data,
                             memory_context,
-                            previous_analysis
+                            previous_analysis,
+                            htf_bias.get('prompt_section', '')
                         )
                         last_result = result
 
@@ -278,16 +304,26 @@ class TradingOrchestrator:
                                 # Get the chosen setup
                                 chosen_setup = decision_data['long_setup'] if primary == 'LONG' else decision_data['short_setup']
 
-                                # Build signal format for legacy signal generator
+                                # Compute position sizing
+                                confidence = chosen_setup.get('confidence', 0.65)
+                                sizing = self.position_sizer.compute_trade_sizing(
+                                    direction=primary,
+                                    entry=chosen_setup['entry'],
+                                    stop=chosen_setup['stop'],
+                                    target=chosen_setup['target'],
+                                    confidence=confidence
+                                )
+
                                 signal = {
                                     'decision': primary,
                                     'entry': chosen_setup['entry'],
                                     'stop': chosen_setup['stop'],
                                     'target': chosen_setup['target'],
                                     'risk_reward': chosen_setup['risk_reward'],
-                                    'confidence': chosen_setup['confidence'],
+                                    'confidence': confidence,
                                     'reasoning': decision_data['overall_reasoning'],
-                                    'setup_type': 'fvg_only'
+                                    'setup_type': 'fvg_only',
+                                    **sizing
                                 }
 
                                 # Log signal generation attempt
@@ -405,26 +441,29 @@ class TradingOrchestrator:
 
     def run_monitor_mode(self):
         """Run in monitoring/dashboard mode"""
-        logger.info("Starting MONITOR mode")
+        analytics = Analytics()
+        print(analytics.render_dashboard())
 
-        # Display performance summary
-        print("\n" + "="*60)
-        print(self.memory_manager.get_performance_summary())
-        print("="*60)
-
-        # Display current signals
+        # Recent signals
         recent_signals = self.signal_generator.get_recent_signals(10)
         if recent_signals:
             print("\nRECENT SIGNALS:")
-            print("-"*60)
-            for signal in recent_signals:
-                print(f"{signal['DateTime']} | {signal['Direction']:<5} | "
-                      f"Entry: {signal['Entry_Price']:<8} | "
-                      f"Stop: {signal['Stop_Loss']:<8} | "
-                      f"Target: {signal['Target']}")
-            print("="*60)
+            print("-" * 65)
+            for s in recent_signals:
+                print(f"  {s.get('DateTime','')} | {s.get('Direction',''):<5} | "
+                      f"Entry: {s.get('Entry_Price',''):<9} | "
+                      f"SL: {s.get('Stop_Loss',''):<9} | "
+                      f"TP: {s.get('Target','')}")
+            print(f"\n  Signals today: {self.signal_generator.count_signals_today()}")
 
-        print(f"\nSignals today: {self.signal_generator.count_signals_today()}")
+        # Current analysis state
+        analysis = self.analysis_manager.current_analysis
+        print(f"\nCURRENT ANALYSIS STATE:")
+        print(f"  Bias: {analysis.get('overall_bias','neutral').upper()}")
+        print(f"  Waiting for: {analysis.get('waiting_for','N/A')}")
+        long_s  = analysis.get('long_assessment',  {}).get('status', 'none')
+        short_s = analysis.get('short_assessment', {}).get('status', 'none')
+        print(f"  Long: {long_s.upper()}  |  Short: {short_s.upper()}")
 
 
 def main():

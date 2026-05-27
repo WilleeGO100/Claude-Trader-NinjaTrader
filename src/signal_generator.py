@@ -34,7 +34,7 @@ class SignalGenerator:
             try:
                 with open(self.output_file, 'r') as f:
                     header = f.readline().strip()
-                    if header != 'DateTime,Direction,Entry_Price,Stop_Loss,Target':
+                    if header != self.CSV_HEADER:
                         logger.warning(f"Invalid header detected: {header}")
                         needs_init = True
             except Exception:
@@ -45,12 +45,14 @@ class SignalGenerator:
 
         logger.info(f"SignalGenerator initialized (output={self.output_file})")
 
+    # New CSV header including sizing fields
+    CSV_HEADER = 'DateTime,Direction,Entry_Price,Stop_Loss,Target,Contracts,Scale1_Price,Scale1_Contracts,Trail_Points'
+
     def _initialize_csv(self):
         """Initialize CSV file with headers"""
         try:
             with open(self.output_file, 'w', newline='') as f:
-                writer = csv.writer(f)
-                writer.writerow(['DateTime', 'Direction', 'Entry_Price', 'Stop_Loss', 'Target'])
+                f.write(self.CSV_HEADER + '\n')
             logger.info("Trade signals CSV initialized")
         except Exception as e:
             logger.error(f"Error initializing CSV: {e}")
@@ -152,13 +154,17 @@ class SignalGenerator:
             timestamp = datetime.now()
         time_str = timestamp.strftime('%m/%d/%Y %H:%M:%S')
 
-        # Prepare row data
+        # Prepare row data — include sizing fields if present
         row = [
             time_str,
             decision['decision'],
             f"{decision['entry']:.2f}",
             f"{decision['stop']:.2f}",
-            f"{decision['target']:.2f}"
+            f"{decision['target']:.2f}",
+            str(decision.get('contracts', 1)),
+            f"{decision.get('scale1_price', 0):.2f}",
+            str(decision.get('scale1_contracts', 0)),
+            str(decision.get('trail_points', 0)),
         ]
 
         # Append to CSV

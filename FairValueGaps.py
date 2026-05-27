@@ -8,10 +8,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 class FVGDisplay:
-    def __init__(self, instrument=None, historical_path='data/HistoricalData.csv', live_feed_path='data/LiveFeed.csv'):
+    def __init__(self, instrument=None, historical_path='data/HistoricalData.csv', live_feed_path='data/LiveFeed.csv', min_gap_size=5.0):
         self.instrument = instrument  # Will be auto-detected from CSV if None
         self.historical_path = historical_path
         self.live_feed_path = live_feed_path
+        self.min_gap_size = min_gap_size
 
         # FVG tracking
         self.active_fvgs = []
@@ -92,7 +93,7 @@ class FVGDisplay:
             # Check for bullish FVG (gap up)
             if candle3['Low'] > candle1['High']:
                 gap_size = candle3['Low'] - candle1['High']
-                if gap_size >= 5.0:  # Minimum gap size
+                if gap_size >= self.min_gap_size:
                     fvg = {
                         'type': 'bullish',
                         'top': candle3['Low'],
@@ -110,7 +111,7 @@ class FVGDisplay:
             # Check for bearish FVG (gap down)
             elif candle3['High'] < candle1['Low']:
                 gap_size = candle1['Low'] - candle3['High']
-                if gap_size >= 5.0:
+                if gap_size >= self.min_gap_size:
                     fvg = {
                         'type': 'bearish',
                         'top': candle1['Low'],
@@ -218,7 +219,7 @@ class FVGDisplay:
         # Check for bullish FVG
         if candle3['Low'] > candle1['High']:
             gap_size = candle3['Low'] - candle1['High']
-            if gap_size >= 5.0:
+            if gap_size >= self.min_gap_size:
                 fvg = {
                     'type': 'bullish',
                     'top': candle3['Low'],
@@ -237,7 +238,7 @@ class FVGDisplay:
         # Check for bearish FVG
         elif candle3['High'] < candle1['Low']:
             gap_size = candle1['Low'] - candle3['High']
-            if gap_size >= 5.0:
+            if gap_size >= self.min_gap_size:
                 fvg = {
                     'type': 'bearish',
                     'top': candle1['Low'],
