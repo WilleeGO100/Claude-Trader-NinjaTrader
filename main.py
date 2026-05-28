@@ -35,6 +35,7 @@ from src.gamma_level_loader import GammaLevelLoader
 from src.order_flow_reader import OrderFlowReader
 from src.dom_analyzer import DOMAnalyzer
 from src.gexbot_feed import GexbotFeed
+from src.setup_detector import SetupDetector
 
 # Load environment variables
 load_dotenv()
@@ -114,6 +115,7 @@ class TradingOrchestrator:
         self.dom           = DOMAnalyzer()
         self.gexbot        = GexbotFeed(gamma_loader=self.gamma)
         self.gexbot.start()
+        self.setup_detector = SetupDetector()
 
         # Scan for upcoming news events at startup
         try:
@@ -397,12 +399,15 @@ class TradingOrchestrator:
                     try:
                         of_section  = of_context.get('prompt_section', '')
                         dom_section = dom_context.get('prompt_section', '')
+                        detector_result = self.setup_detector.update(market_data, fvg_context)
+                        detector_section = detector_result.get('prompt_section', '')
+
                         result = self.trading_agent.analyze_setup(
                             fvg_context,
                             market_data,
                             memory_context,
                             previous_analysis,
-                            htf_bias.get('prompt_section', '') + self.live_trend.get_prompt_section() + gamma_section + of_section + dom_section,
+                            htf_bias.get('prompt_section', '') + self.live_trend.get_prompt_section() + gamma_section + of_section + dom_section + detector_section,
                             self.open_position
                         )
                         last_result = result

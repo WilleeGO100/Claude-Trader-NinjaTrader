@@ -188,11 +188,13 @@ Use ALL available data to find the best trade opportunity.
 
 AVAILABLE SETUP TYPES:
 ======================
-1. FVG_FILL - Trading to fill a fair value gap
-2. EMA_BOUNCE - Pullback to EMA support/resistance
-3. MOMENTUM - Strong directional move with confluence
-4. LEVEL_TRADE - Break or rejection at psychological level
+1. FVG_FILL      - Trading to fill a fair value gap
+2. EMA_BOUNCE    - Pullback to EMA support/resistance
+3. MOMENTUM      - Strong directional move with confluence
+4. LEVEL_TRADE   - Break or rejection at psychological level
 5. COUNTER_TREND - Mean reversion from extreme conditions
+6. KELTNER_BOUNCE - Price at Keltner channel extreme + stochastic oversold/overbought (technical mean reversion)
+7. SWEEP_FVG     - Liquidity sweep of a swing high/low followed by FVG confirmation (SMC entry)
 
 UNIVERSAL TARGET BUFFER RULE:
 =============================
@@ -218,15 +220,21 @@ Ask yourself:
 3. Should I continue waiting or has the setup improved/deteriorated?
 4. Has price moved closer to or further from my planned entry?
 
-If you were waiting for a setup and nothing meaningful changed:
-- Keep the same assessment
-- Increment setup_age_bars
-- Update only what's relevant (e.g., distance to entry)
+SETUP ABANDONMENT RULES — check these EVERY bar when status is "waiting":
+- If price has moved MORE THAN 30 points AWAY from your planned entry: ABANDON immediately
+  → The setup is no longer valid at that level. Set status "none", clear entry_plan.
+- If you have been "waiting" for MORE THAN 8 bars without triggering: ABANDON
+  → Price has rejected the level. The setup is stale. Move on.
+- After abandoning: do NOT say "setup missed". Immediately scan from current price.
+  → Ask: given where price IS RIGHT NOW, what is the best available setup?
+  → The move away from your entry may have CREATED a new setup in the other direction.
 
-If you identified no setup previously and still see no setup:
-- It's OKAY to stay in "none" status
-- Explain why you're still waiting
-- Don't force a trade just because time has passed
+PLAN B REQUIREMENT — mandatory when status is "waiting":
+- You must ALWAYS define what you do if Plan A does NOT trigger.
+- "waiting_for" must name BOTH scenarios:
+  → "Plan A: SHORT bounce to 30000. Plan B: LONG if price breaks above 30050 and holds."
+- If the opposite direction is truly invalid, explain why in one sentence.
+- A system with only one plan will go days without a trade. Always have a Plan B.
 
 """
 
@@ -499,7 +507,7 @@ Respond in JSON format:
 
     "long_assessment": {{
         "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | null,
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | null,
         "entry_plan": <price or null>,
         "stop_plan": <price or null>,
         "raw_target": <target before buffer or null>,
@@ -511,7 +519,7 @@ Respond in JSON format:
 
     "short_assessment": {{
         "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | null,
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | null,
         "entry_plan": <price or null>,
         "stop_plan": <price or null>,
         "raw_target": <target before buffer or null>,
