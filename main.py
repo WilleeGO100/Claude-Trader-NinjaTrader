@@ -27,6 +27,7 @@ from src.news_scanner import NewsScanner
 from src.position_sizer import PositionSizer
 from src.analytics import Analytics
 from src.htf_analyzer import CombinedHTFAnalyzer
+from src.live_trend_monitor import LiveTrendMonitor
 from src.intrabar_watchdog import IntrabarWatchdog
 from src.trade_notifier import TradeNotifier
 from src.setup_quality import compute_setup_quality
@@ -103,8 +104,9 @@ class TradingOrchestrator:
         self.session_filter = SessionFilter(self.config)
         self.news_filter = NewsFilter(self.config)
         self.position_sizer = PositionSizer(self.config)
-        self.htf_analyzer = CombinedHTFAnalyzer()
-        self.watchdog      = IntrabarWatchdog(self.config, self.signal_generator)
+        self.htf_analyzer   = CombinedHTFAnalyzer()
+        self.live_trend     = LiveTrendMonitor()
+        self.watchdog       = IntrabarWatchdog(self.config, self.signal_generator)
         self.notifier      = TradeNotifier()
         self.gamma         = GammaLevelLoader()
         self.order_flow    = OrderFlowReader()
@@ -238,6 +240,7 @@ class TradingOrchestrator:
 
         self.watchdog.on_entry_fired = on_watchdog_entry
         self.watchdog.start()
+        self.live_trend.start()
 
         # Track last processed bar and result
         last_bar_time = None
@@ -384,7 +387,7 @@ class TradingOrchestrator:
                     # Pause watchdog during Claude's API call to prevent conflicts
                     self.watchdog.pause()
                     htf_bias      = self.htf_analyzer.get_bias()
-                    htf_bias      = self.htf_analyzer.apply_intrabar_override(htf_bias, current_price, market_data)
+                    htf_bias      = self.live_trend.apply_gate_override(htf_bias)
                     gamma_section = self.gamma.get_prompt_section(current_price)
                     of_context    = self.order_flow.get_context(current_price)
                     dom_context   = self.dom.get_context(current_price)
@@ -396,7 +399,7 @@ class TradingOrchestrator:
                             market_data,
                             memory_context,
                             previous_analysis,
-                            htf_bias.get('prompt_section', '') + gamma_section + of_section + dom_section,
+                            htf_bias.get('prompt_section', '') + self.live_trend.get_prompt_section() + gamma_section + of_section + dom_section,
                             self.open_position
                         )
                         last_result = result
@@ -587,6 +590,7 @@ class TradingOrchestrator:
 
         except KeyboardInterrupt:
             self.watchdog.stop()
+            self.live_trend.stop()
             logger.info("\nLive trading stopped by user")
         except Exception as e:
             logger.error(f"Error in live trading: {e}")

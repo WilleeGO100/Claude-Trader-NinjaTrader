@@ -215,9 +215,15 @@ class CombinedHTFAnalyzer:
         self,
         path_4h: str = "data/HistoricalData_4H.csv",
         path_1h: str = "data/HistoricalData_1H.csv",
+        override_streak_required: int = 3,
     ):
         self.analyzer_4h = HTFAnalyzer(htf_path=path_4h, ema_fast=8, ema_slow=21)
         self.analyzer_1h = HTFAnalyzer(htf_path=path_1h, ema_fast=8, ema_slow=21)
+        self.override_streak_required = override_streak_required
+        self._above_ema21_streak = 0
+        self._above_both_streak  = 0
+        self._below_ema21_streak = 0
+        self._below_both_streak  = 0
 
     def get_bias(self) -> Dict[str, Any]:
         bias_4h = self.analyzer_4h.get_bias(label="4H MACRO BIAS")

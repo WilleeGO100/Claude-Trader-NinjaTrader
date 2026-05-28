@@ -62,7 +62,7 @@
     "schedule_file": "data/news_schedule.json"
   },
   "session_rules": {
-    "enabled": true,
+    "enabled": false,
     "allowed_sessions": ["ny_open", "london", "asian"],
     "ny_open": {
       "enabled": true,
