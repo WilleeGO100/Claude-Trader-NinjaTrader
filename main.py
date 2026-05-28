@@ -26,7 +26,7 @@ from src.news_filter import NewsFilter
 from src.news_scanner import NewsScanner
 from src.position_sizer import PositionSizer
 from src.analytics import Analytics
-from src.htf_analyzer import HTFAnalyzer
+from src.htf_analyzer import CombinedHTFAnalyzer
 from src.intrabar_watchdog import IntrabarWatchdog
 from src.trade_notifier import TradeNotifier
 from src.setup_quality import compute_setup_quality
@@ -103,7 +103,7 @@ class TradingOrchestrator:
         self.session_filter = SessionFilter(self.config)
         self.news_filter = NewsFilter(self.config)
         self.position_sizer = PositionSizer(self.config)
-        self.htf_analyzer = HTFAnalyzer()
+        self.htf_analyzer = CombinedHTFAnalyzer()
         self.watchdog      = IntrabarWatchdog(self.config, self.signal_generator)
         self.notifier      = TradeNotifier()
         self.gamma         = GammaLevelLoader()
@@ -439,14 +439,27 @@ class TradingOrchestrator:
                                 setup_confidence = chosen_setup.get('confidence', 0.0)
 
                                 htf_blocked = False
+                                htf_strength     = htf_bias.get('strength', 'none')
+                                counter_conf_req = htf_bias.get('counter_conf_required', 0.75)
+                                bias_4h          = htf_bias.get('bias_4h', 'unknown')
+                                bias_1h          = htf_bias.get('bias_1h', 'unknown')
+
                                 if htf_bias_value == 'bullish' and primary == 'SHORT':
-                                    logger.info(f"HTF gate: blocked SHORT — 1H bias is BULLISH")
-                                    htf_blocked = True
+                                    if counter_conf_req >= 1.0:
+                                        logger.info(f"HTF gate: blocked SHORT — 4H={bias_4h} 1H={bias_1h} ({htf_strength})")
+                                        htf_blocked = True
+                                    elif setup_confidence < counter_conf_req:
+                                        logger.info(f"HTF gate: blocked SHORT — HTF bullish ({htf_strength}), needs conf>={counter_conf_req:.2f} (got {setup_confidence:.2f})")
+                                        htf_blocked = True
                                 elif htf_bias_value == 'bearish' and primary == 'LONG':
-                                    logger.info(f"HTF gate: blocked LONG — 1H bias is BEARISH")
-                                    htf_blocked = True
-                                elif htf_bias_value == 'neutral' and setup_confidence < 0.75:
-                                    logger.info(f"HTF gate: blocked {primary} — neutral HTF requires confidence >= 0.75 (got {setup_confidence:.2f})")
+                                    if counter_conf_req >= 1.0:
+                                        logger.info(f"HTF gate: blocked LONG — 4H={bias_4h} 1H={bias_1h} ({htf_strength})")
+                                        htf_blocked = True
+                                    elif setup_confidence < counter_conf_req:
+                                        logger.info(f"HTF gate: blocked LONG — HTF bearish ({htf_strength}), needs conf>={counter_conf_req:.2f} (got {setup_confidence:.2f})")
+                                        htf_blocked = True
+                                elif htf_bias_value in ('neutral', 'unknown') and setup_confidence < 0.75:
+                                    logger.info(f"HTF gate: blocked {primary} — HTF {htf_bias_value} requires conf>=0.75 (got {setup_confidence:.2f})")
                                     htf_blocked = True
 
                                 if not htf_blocked:
@@ -457,7 +470,7 @@ class TradingOrchestrator:
                                         direction=primary,
                                         fvg_context=fvg_context,
                                         market_data=market_data,
-                                        htf_bias=htf_bias.get('bias', 'unknown'),
+                                        htf_bias=htf_bias_value,
                                         session_active=True,
                                         gamma_loader=self.gamma,
                                         order_flow_context=of_context,

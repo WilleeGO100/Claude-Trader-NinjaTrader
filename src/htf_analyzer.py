@@ -190,3 +190,108 @@ class HTFAnalyzer:
         if last['EMA_fast'] < last['EMA_slow'] * 0.999:
             return 'bearish'
         return 'neutral'
+
+
+class CombinedHTFAnalyzer:
+    """
+    Two-layer HTF bias: 4H sets the macro trend, 1H fills in intraday structure.
+
+    Gate hierarchy:
+      - 4H bullish  + 1H bullish  → strong bullish  (block SHORTs hard)
+      - 4H bullish  + 1H bearish  → bullish caution  (4H wins; SHORTs blocked, LONGs need conf >= 0.70)
+      - 4H bullish  + 1H neutral  → mild bullish     (SHORTs blocked)
+      - 4H bearish  + 1H bearish  → strong bearish   (block LONGs hard)
+      - 4H bearish  + 1H bullish  → bearish caution  (4H wins; LONGs blocked, SHORTs need conf >= 0.70)
+      - 4H bearish  + 1H neutral  → mild bearish     (LONGs blocked)
+      - 4H neutral  + 1H bullish  → mild bullish     (SHORTs need conf >= 0.75)
+      - 4H neutral  + 1H bearish  → mild bearish     (LONGs need conf >= 0.75)
+      - 4H neutral  + 1H neutral  → neutral          (both need conf >= 0.75)
+      - 4H unknown               → fall back to 1H only
+      - Both unknown             → unknown (conf >= 0.75 required)
+    """
+
+    def __init__(
+        self,
+        path_4h: str = "data/HistoricalData_4H.csv",
+        path_1h: str = "data/HistoricalData_1H.csv",
+    ):
+        self.analyzer_4h = HTFAnalyzer(htf_path=path_4h, ema_fast=8, ema_slow=21)
+        self.analyzer_1h = HTFAnalyzer(htf_path=path_1h, ema_fast=8, ema_slow=21)
+
+    def get_bias(self) -> Dict[str, Any]:
+        bias_4h = self.analyzer_4h.get_bias()
+        bias_1h = self.analyzer_1h.get_bias()
+
+        b4 = bias_4h.get('bias', 'unknown')
+        b1 = bias_1h.get('bias', 'unknown')
+
+        combined, strength, counter_conf = self._combine(b4, b1)
+
+        section_4h = bias_4h.get('prompt_section', '  4H data not available\n')
+        section_1h = bias_1h.get('prompt_section', '  1H data not available\n')
+
+        # Rewrite header labels clearly
+        section_4h = section_4h.replace('1H HIGHER TIMEFRAME BIAS', '4H MACRO BIAS')
+        section_1h = section_1h.replace('1H HIGHER TIMEFRAME BIAS', '1H STRUCTURE BIAS')
+
+        advice = self._advice(b4, b1, combined, strength, counter_conf)
+
+        prompt_section = (
+            f"MULTI-TIMEFRAME BIAS:\n"
+            f"{section_4h}"
+            f"{section_1h}"
+            f"  Combined verdict: {combined.upper()} ({strength}) — {advice}\n"
+        )
+
+        return {
+            'bias': combined,
+            'strength': strength,
+            'counter_conf_required': counter_conf,
+            'bias_4h': b4,
+            'bias_1h': b1,
+            'available': bias_4h.get('available', False) or bias_1h.get('available', False),
+            'prompt_section': prompt_section,
+        }
+
+    def _combine(self, b4: str, b1: str):
+        """Returns (combined_bias, strength, counter_conf_required)."""
+        if b4 == 'unknown':
+            # Fall back to 1H only
+            if b1 == 'unknown':
+                return 'unknown', 'none', 0.75
+            return b1, 'mild', 0.75
+
+        if b4 == 'bullish':
+            if b1 == 'bullish':
+                return 'bullish', 'strong', 1.0    # hard block on counter
+            if b1 == 'bearish':
+                return 'bullish', 'caution', 0.70  # 4H wins, but 1H diverging
+            return 'bullish', 'mild', 1.0           # neutral 1H — still block counter
+
+        if b4 == 'bearish':
+            if b1 == 'bearish':
+                return 'bearish', 'strong', 1.0
+            if b1 == 'bullish':
+                return 'bearish', 'caution', 0.70
+            return 'bearish', 'mild', 1.0
+
+        # 4H neutral — defer to 1H
+        if b1 == 'bullish':
+            return 'bullish', 'mild', 0.75
+        if b1 == 'bearish':
+            return 'bearish', 'mild', 0.75
+        return 'neutral', 'none', 0.75
+
+    def _advice(self, b4, b1, combined, strength, counter_conf):
+        if strength == 'strong':
+            return f"4H and 1H both {combined} — favor {combined.upper()[0:4]}s only"
+        if strength == 'caution':
+            opp = 'SHORT' if combined == 'bullish' else 'LONG'
+            return f"4H {b4} overrides 1H {b1} divergence — {opp}s blocked; with-trend needs conf >= 0.70"
+        if strength == 'mild' and b4 != 'neutral':
+            opp = 'SHORT' if combined == 'bullish' else 'LONG'
+            return f"4H {b4}, 1H neutral — {opp}s blocked"
+        if strength == 'mild' and b4 == 'neutral':
+            opp = 'SHORT' if combined == 'bullish' else 'LONG'
+            return f"4H neutral, 1H {b1} — {opp}s need conf >= 0.75"
+        return "No directional bias — both timeframes neutral; require conf >= 0.75"
