@@ -10,6 +10,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import certifi
+os.environ["REQUESTS_CA_BUNDLE"] = certifi.where()
 
 logger = logging.getLogger(__name__)
 ACTIVITY_LOG = Path('data/activity_log.csv')
@@ -117,8 +119,8 @@ class TradeNotifier:
         if not self.webhook_url:
             return
         try:
-            import httpx
-            httpx.post(self.webhook_url, json=payload, timeout=5)
+            import requests
+            requests.post(self.webhook_url, json=payload, timeout=5)
         except Exception as e:
             logger.debug(f"Discord error: {e}")
 
