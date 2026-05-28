@@ -10,7 +10,7 @@
     "confidence_threshold": 0.65,
     "min_setup_age_bars": 1,
     "position_size": 1,
-    "watchdog_touch_pts": 8.0
+    "watchdog_touch_pts": 20.0
   },
   "position_sizing": {
     "base_contracts": 1,
