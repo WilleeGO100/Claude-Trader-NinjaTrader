@@ -292,3 +292,76 @@ class CombinedHTFAnalyzer:
             opp = 'SHORT' if combined == 'bullish' else 'LONG'
             return f"4H neutral, 1H {b1} — {opp}s need conf >= 0.75"
         return "No directional bias — both timeframes neutral; require conf >= 0.75"
+
+    def apply_intrabar_override(
+        self,
+        bias: Dict[str, Any],
+        current_price: float,
+        market_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Downgrade bias strength when intrabar price action contradicts the
+        closed-bar HTF verdict. Never upgrades — only loosens hard blocks.
+
+        Rules (bearish side):
+          price > EMA21                → bearish strong/mild → caution (LONGs at conf >= 0.70)
+          price > EMA21 AND > EMA75   → bearish any         → neutral  (conf >= 0.75 both ways)
+
+        Rules (bullish side — mirror):
+          price < EMA21                → bullish strong/mild → caution (SHORTs at conf >= 0.70)
+          price < EMA21 AND < EMA75   → bullish any         → neutral
+        """
+        combined  = bias.get('bias', 'unknown')
+        strength  = bias.get('strength', 'none')
+        ema21     = market_data.get('ema21', 0)
+        ema75     = market_data.get('ema75', 0)
+
+        if not ema21 or not current_price:
+            return bias
+
+        override_reason = None
+
+        if combined == 'bearish':
+            if current_price > ema21 and current_price > ema75:
+                override_reason = (
+                    f"[INTRABAR] price ({current_price:.2f}) above EMA21 ({ema21:.2f}) "
+                    f"and EMA75 ({ema75:.2f}) — bearish bias downgraded to neutral"
+                )
+                bias = dict(bias)
+                bias['bias']                 = 'neutral'
+                bias['strength']             = 'none'
+                bias['counter_conf_required'] = 0.75
+            elif current_price > ema21 and strength in ('strong', 'mild'):
+                override_reason = (
+                    f"[INTRABAR] price ({current_price:.2f}) above EMA21 ({ema21:.2f}) "
+                    f"— bearish {strength} downgraded to caution"
+                )
+                bias = dict(bias)
+                bias['strength']             = 'caution'
+                bias['counter_conf_required'] = 0.70
+
+        elif combined == 'bullish':
+            if current_price < ema21 and current_price < ema75:
+                override_reason = (
+                    f"[INTRABAR] price ({current_price:.2f}) below EMA21 ({ema21:.2f}) "
+                    f"and EMA75 ({ema75:.2f}) — bullish bias downgraded to neutral"
+                )
+                bias = dict(bias)
+                bias['bias']                 = 'neutral'
+                bias['strength']             = 'none'
+                bias['counter_conf_required'] = 0.75
+            elif current_price < ema21 and strength in ('strong', 'mild'):
+                override_reason = (
+                    f"[INTRABAR] price ({current_price:.2f}) below EMA21 ({ema21:.2f}) "
+                    f"— bullish {strength} downgraded to caution"
+                )
+                bias = dict(bias)
+                bias['strength']             = 'caution'
+                bias['counter_conf_required'] = 0.70
+
+        if override_reason:
+            logger.info(override_reason)
+            bias = dict(bias)
+            bias['prompt_section'] = bias.get('prompt_section', '') + f"  {override_reason}\n"
+
+        return bias

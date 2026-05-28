@@ -384,6 +384,7 @@ class TradingOrchestrator:
                     # Pause watchdog during Claude's API call to prevent conflicts
                     self.watchdog.pause()
                     htf_bias      = self.htf_analyzer.get_bias()
+                    htf_bias      = self.htf_analyzer.apply_intrabar_override(htf_bias, current_price, market_data)
                     gamma_section = self.gamma.get_prompt_section(current_price)
                     of_context    = self.order_flow.get_context(current_price)
                     dom_context   = self.dom.get_context(current_price)
