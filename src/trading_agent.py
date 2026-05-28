@@ -241,6 +241,10 @@ PLAN B REQUIREMENT — mandatory when status is "waiting":
         if htf_context:
             prompt += f"\n{htf_context}\n"
 
+        # Explicit flat state — prevents Claude from inheriting ghost position narrative
+        if not open_position:
+            prompt += "\nPOSITION STATUS: FLAT — You are NOT in any open trade. Do NOT manage or validate any fictional position. Focus ONLY on finding new entries.\n"
+
         # Inject open position context — critical for thesis management
         if open_position:
             direction   = open_position['direction']
