@@ -153,6 +153,7 @@ class TradingOrchestrator:
         # Open position tracking — must be set before anything checks it
         self.open_position = None
         self._completed_trade_count = 0
+        self._bars_analyzed = 0  # skip previous_analysis on first bar to prevent ghost inheritance
 
         # Initialization complete
 
@@ -388,8 +389,9 @@ class TradingOrchestrator:
                     # Get memory context
                     memory_context = self.memory_manager.get_memory_context()
 
-                    # Get previous analysis for incremental updates
-                    previous_analysis = self.analysis_manager.format_previous_analysis_for_prompt()
+                    # Get previous analysis — skip on first bar to prevent ghost position inheritance
+                    self._bars_analyzed += 1
+                    previous_analysis = self.analysis_manager.format_previous_analysis_for_prompt() if self._bars_analyzed > 1 else None
 
                     # Pause watchdog during Claude's API call to prevent conflicts
                     self.watchdog.pause()
