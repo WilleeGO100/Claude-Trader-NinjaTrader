@@ -37,7 +37,7 @@ class HTFAnalyzer:
             logger.warning(f"HTF load error: {e}")
             return None
 
-    def get_bias(self) -> Dict[str, Any]:
+    def get_bias(self, label: str = "HTF BIAS") -> Dict[str, Any]:
         """
         Returns a dict with bias label, last price, EMA values, and a
         formatted string ready for injection into the Claude prompt.
@@ -48,8 +48,8 @@ class HTFAnalyzer:
                 'bias': 'unknown',
                 'available': False,
                 'prompt_section': (
-                    "4H HIGHER TIMEFRAME BIAS:\n"
-                    "  Not available — apply HTFDataFeed.cs to a 4H NQ chart to enable.\n"
+                    f"{label}:\n"
+                    "  Not available — HTFDataFeed.cs not running on this timeframe.\n"
                 ),
             }
 
@@ -98,8 +98,8 @@ class HTFAnalyzer:
             advice  = "No directional bias — EMA and structure both neutral. Require high confluence."
 
         prompt_section = (
-            f"1H HIGHER TIMEFRAME BIAS:\n"
-            f"  Last 1H bar: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
+            f"{label}:\n"
+            f"  Last bar: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
             f"  EMA bias:       {ema_str}\n"
             f"  Structure bias: {struct_str}\n"
             f"  Combined:       {bias.upper()} — {advice}\n"
@@ -219,8 +219,8 @@ class CombinedHTFAnalyzer:
         self.analyzer_1h = HTFAnalyzer(htf_path=path_1h, ema_fast=8, ema_slow=21)
 
     def get_bias(self) -> Dict[str, Any]:
-        bias_4h = self.analyzer_4h.get_bias()
-        bias_1h = self.analyzer_1h.get_bias()
+        bias_4h = self.analyzer_4h.get_bias(label="4H MACRO BIAS")
+        bias_1h = self.analyzer_1h.get_bias(label="1H STRUCTURE BIAS")
 
         b4 = bias_4h.get('bias', 'unknown')
         b1 = bias_1h.get('bias', 'unknown')
@@ -229,10 +229,6 @@ class CombinedHTFAnalyzer:
 
         section_4h = bias_4h.get('prompt_section', '  4H data not available\n')
         section_1h = bias_1h.get('prompt_section', '  1H data not available\n')
-
-        # Rewrite header labels clearly
-        section_4h = section_4h.replace('1H HIGHER TIMEFRAME BIAS', '4H MACRO BIAS')
-        section_1h = section_1h.replace('1H HIGHER TIMEFRAME BIAS', '1H STRUCTURE BIAS')
 
         advice = self._advice(b4, b1, combined, strength, counter_conf)
 
