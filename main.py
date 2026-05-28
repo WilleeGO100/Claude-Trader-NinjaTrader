@@ -186,9 +186,17 @@ class TradingOrchestrator:
         """Count completed trades in trades_taken.csv"""
         try:
             import csv as csv_mod
+            count = 0
             with open('data/trades_taken.csv', 'r') as f:
-                rows = list(csv_mod.DictReader(f))
-            return sum(1 for r in rows if r.get('Exit_Price', '').strip() not in ('', 'None', '0.00'))
+                reader = csv_mod.reader(f)
+                header = next(reader, [])
+                exit_col = header.index('Exit_Price') if 'Exit_Price' in header else 3
+                for row in reader:
+                    if len(row) > exit_col:
+                        val = row[exit_col].strip()
+                        if val not in ('', 'None', '0', '0.00'):
+                            count += 1
+            return count
         except Exception:
             return 0
 
@@ -696,6 +704,39 @@ def main():
                        help='Output file for backtest results')
 
     args = parser.parse_args()
+
+    # Enforce single instance for live mode — kill any previous agent on startup
+    if args.mode == 'live':
+        import signal
+        import subprocess
+        lockfile = Path('data/agent.pid')
+        current_pid = os.getpid()
+
+        if lockfile.exists():
+            try:
+                old_pid = int(lockfile.read_text().strip())
+                if old_pid != current_pid:
+                    # Check the process exists and is our agent (Windows: tasklist)
+                    result = subprocess.run(
+                        ['tasklist', '/FI', f'PID eq {old_pid}', '/FO', 'CSV', '/NH'],
+                        capture_output=True, text=True
+                    )
+                    if str(old_pid) in result.stdout and 'python' in result.stdout.lower():
+                        print(f"[STARTUP] Killing previous agent instance (PID {old_pid})")
+                        os.kill(old_pid, signal.SIGTERM)
+                        time.sleep(1)
+                        # Force kill if still alive
+                        try:
+                            os.kill(old_pid, signal.SIGKILL)
+                        except (ProcessLookupError, OSError):
+                            pass
+            except (ValueError, OSError):
+                pass
+
+        lockfile.write_text(str(current_pid))
+
+        import atexit
+        atexit.register(lambda: lockfile.unlink(missing_ok=True))
 
     # Initialize orchestrator
     orchestrator = TradingOrchestrator(config_path=args.config)

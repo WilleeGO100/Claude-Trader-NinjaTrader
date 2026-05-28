@@ -43,6 +43,9 @@ class TradingAgent:
         self.stop_loss_max = config.get('risk_management', {}).get('stop_loss_max', 50)
         self.stop_buffer = config.get('risk_management', {}).get('stop_buffer', 5)
 
+        # Built once at init — static for the session, eligible for prompt caching
+        self._system_prompt = self._build_system_prompt()
+
         logger.info(f"TradingAgent initialized (model={self.model}, min_rr={self.min_risk_reward})")
 
     def _find_psychological_levels(self, current_price: float, interval: int = 100) -> Dict[str, float]:
@@ -71,16 +74,11 @@ class TradingAgent:
             'below': level_below
         }
 
-    def query_claude_with_retry(self, prompt: str, max_retries: int = 5) -> Dict[str, Any]:
+    def query_claude_with_retry(self, user_message: str, max_retries: int = 5) -> Dict[str, Any]:
         """
-        Query Claude API with exponential backoff retry logic
-
-        Args:
-            prompt: The prompt to send
-            max_retries: Maximum number of retry attempts
-
-        Returns:
-            API response or raises exception after all retries
+        Query Claude API with exponential backoff retry logic.
+        Sends the static system prompt with cache_control so Anthropic caches it
+        for 5 minutes — only the dynamic user_message is billed in full each bar.
         """
         base_delay = 2  # Start with 2 second delay
 
@@ -88,11 +86,16 @@ class TradingAgent:
             try:
                 response = self.client.messages.create(
                     model=self.model,
-                    max_tokens=8192,  # Increased to handle full JSON response with detailed reasoning
+                    max_tokens=8192,
                     temperature=0.3,
+                    system=[{
+                        "type": "text",
+                        "text": self._system_prompt,
+                        "cache_control": {"type": "ephemeral"}
+                    }],
                     messages=[{
                         "role": "user",
-                        "content": prompt
+                        "content": user_message
                     }]
                 )
                 return response
@@ -132,28 +135,13 @@ class TradingAgent:
         # Should never reach here, but just in case
         raise Exception("Max retries exceeded")
 
-    def build_prompt(
-        self,
-        fvg_context: Dict[str, Any],
-        market_data: Dict[str, Any],
-        memory_context: Optional[Dict[str, Any]] = None,
-        previous_analysis: Optional[str] = None,
-        htf_context: Optional[str] = None,
-        open_position: Optional[Dict[str, Any]] = None
-    ) -> str:
+    def _build_system_prompt(self) -> str:
         """
-        Build Claude prompt for trade analysis
-
-        Args:
-            fvg_context: FVG market context
-            market_data: Market indicators (EMA, Stochastic, etc.)
-            memory_context: Past trade performance data
-            previous_analysis: Previous analysis state (formatted string)
-
-        Returns:
-            Formatted prompt string
+        Static system prompt built once at init.
+        Sent with cache_control so Anthropic caches it across bars — only the
+        dynamic market snapshot (build_user_message) is billed in full each bar.
         """
-        prompt = f"""You are an expert NQ futures trader specializing in price action analysis using Fair Value Gaps, EMAs, and momentum indicators.
+        return f"""You are an expert NQ futures trader specializing in price action analysis using Fair Value Gaps, EMAs, and momentum indicators.
 
 YOUR TRADING PHILOSOPHY:
 ========================
@@ -204,12 +192,6 @@ For ALL trades, apply 5-point buffer to avoid needing perfect precision:
 
 This accounts for spread/slippage and protects against stop-hunting at exact levels.
 
-"""
-
-        # Add previous analysis if available
-        if previous_analysis:
-            prompt += previous_analysis + "\n"
-            prompt += """
 CRITICAL INSTRUCTIONS FOR INCREMENTAL ANALYSIS:
 ===============================================
 You are NOT doing a fresh analysis. You are UPDATING your previous assessment.
@@ -236,7 +218,185 @@ PLAN B REQUIREMENT — mandatory when status is "waiting":
 - If the opposite direction is truly invalid, explain why in one sentence.
 - A system with only one plan will go days without a trade. Always have a Plan B.
 
+DECISION CRITERIA:
+==================
+- Minimum Risk/Reward: {self.min_risk_reward}:1 (calculated from actual prices — not self-reported)
+- Stop Loss Range: {self.stop_loss_min}-{self.stop_loss_max} points
+- Confidence Threshold: {self.confidence_threshold}
+
+STOP LOSS PHILOSOPHY — DYNAMIC, STRUCTURE-BASED:
+=================================================
+Stops are placed at the level where the trade thesis is DEFINITIVELY WRONG.
+Never use a fixed default. Size each stop to the current structure and setup type.
+
+STEP 1 — Identify the invalidation level for this specific trade right now:
+  FVG_FILL SHORT: The thesis breaks if price reclaims the level it was rejected from.
+    → Stop = nearest resistance ABOVE entry (nearest psychological level, nearest EMA above, or recent swing high) + 5pt buffer.
+    → If entry is within 15pts of a psych level: stop = psych_level + 5pts.
+    → If no clear level nearby: stop = entry + (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
+
+  FVG_FILL LONG: The thesis breaks if price loses the support it bounced from.
+    → Stop = nearest support BELOW entry (nearest psychological level, nearest EMA below, or recent swing low) - 5pt buffer.
+    → If entry is within 15pts of a psych level: stop = psych_level - 5pts.
+    → If no clear level nearby: stop = entry - (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
+
+  EMA_BOUNCE LONG: Stop = EMA that price bounced from - 10pts.
+  EMA_BOUNCE SHORT: Stop = EMA that price bounced from + 10pts.
+
+  LEVEL_TRADE: Stop = the key level ± 10pts (beyond the level being traded).
+
+  MOMENTUM / COUNTER_TREND: Stop = most recent swing high (SHORT) or swing low (LONG) + 5pt buffer.
+
+  KELTNER_BOUNCE LONG: Thesis is that price bounced off the Keltner lower band.
+    → Stop = Keltner lower band value at entry - 8pts.
+    → Target = Keltner midline (mean-reversion target).
+    → If stochastic is not yet below 20, wait — do not pre-empt the signal.
+
+  KELTNER_BOUNCE SHORT: Thesis is that price rejected at the Keltner upper band.
+    → Stop = Keltner upper band value at entry + 8pts.
+    → Target = Keltner midline.
+    → If stochastic is not yet above 80, wait — do not pre-empt the signal.
+
+  SWEEP_FVG LONG: Price swept a recent swing low (trapping shorts) then entered a bullish FVG.
+    → Stop = the swing low level that was swept - 5pts (below the trap level).
+    → Target = next bearish FVG above or next swing high.
+    → The sweep must have occurred within the last 5 bars. Stale sweeps do not count.
+
+  SWEEP_FVG SHORT: Price swept a recent swing high (trapping longs) then entered a bearish FVG.
+    → Stop = the swing high level that was swept + 5pts (above the trap level).
+    → Target = next bullish FVG below or next swing low.
+    → The sweep must have occurred within the last 5 bars.
+
+  HA_TREND LONG: First bullish Heikin Ashi flip (bearish → bullish candle) with EMA21 rising.
+    → Stop = low of the first bullish HA candle in the sequence - 5pts.
+    → Target = nearest resistance (FVG above, EMA level, or psychological level).
+    → Only valid if EMA21 > EMA75 OR price is above EMA21. Do not trade HA flips into downtrends.
+
+  HA_TREND SHORT: First bearish Heikin Ashi flip (bullish → bearish candle) with EMA21 falling.
+    → Stop = high of the first bearish HA candle in the sequence + 5pts.
+    → Target = nearest support (FVG below, EMA level, or psychological level).
+    → Only valid if EMA21 < EMA75 OR price is below EMA21. Do not trade HA flips into uptrends.
+
+STEP 2 — Verify the math before committing:
+  risk  = abs(entry - stop)
+  reward = abs(target - entry)
+  R/R   = reward / risk
+
+  If R/R < {self.min_risk_reward}: DO NOT take the trade. Do not argue exceptions.
+  If R/R ≥ {self.min_risk_reward}: setup is valid.
+
+STEP 3 — Report the stop you calculated, not a rounded guess.
+  The risk_reward field in your JSON MUST match abs(target - entry) / abs(stop - entry) exactly.
+  Do not write a different number in risk_reward than your math produces.
+
+ANALYSIS REQUIRED:
+==================
+You MUST provide a COMPLETE response with both long_assessment and short_assessment.
+
+IMPORTANT: If you don't see a quality setup, that's COMPLETELY ACCEPTABLE.
+- Use status: "none" for assessments with no valid setup
+- Use status: "waiting" for setups you're monitoring but not ready to trade
+- Use status: "ready" for setups that meet all criteria and are tradeable NOW
+
+For EACH assessment (long and short):
+1. Determine status: "none", "waiting", or "ready"
+2. If status is NOT "none", provide:
+   - Setup Type: Choose ONE: FVG_FILL, EMA_BOUNCE, MOMENTUM, LEVEL_TRADE, COUNTER_TREND, KELTNER_BOUNCE, SWEEP_FVG, or HA_TREND
+   - Entry price: Current price or nearby entry level
+   - Raw Target: Your identified target level BEFORE buffer
+   - Final Target: Apply 5pt buffer (LONG: raw - 5, SHORT: raw + 5)
+   - Stop loss: Structure-based per the rules above — NOT a fixed number
+   - Risk/Reward ratio: reward / risk using your actual prices — must match exactly
+   - Confidence level (0.0-1.0)
+   - Reasoning: Identify the invalidation level, explain stop placement, show R/R math
+3. If status is "none", explain why no setup exists
+
+Update Your Assessment Based On:
+- What changed from previous analysis?
+- Has the invalidation level shifted?
+- FVG quality and proximity
+- EMA trend alignment
+- Stochastic momentum direction and level
+- How long you've been tracking this setup (setup_age_bars)
+- Whether you should keep waiting or abandon the setup
+
+Respond in JSON format:
+{{
+    "current_bar_index": <increment from previous or 0 if first>,
+    "overall_bias": "bullish" | "bearish" | "neutral",
+    "waiting_for": "<describe what you're waiting for, or 'No quality setup' if none>",
+
+    "long_assessment": {{
+        "status": "none" | "waiting" | "ready",
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
+        "entry_plan": <price or null>,
+        "stop_plan": <price or null>,
+        "raw_target": <target before buffer or null>,
+        "target_plan": <final target WITH 5pt buffer applied or null>,
+        "risk_reward": <ratio calculated with final target or null>,
+        "confidence": <0.0-1.0>,
+        "reasoning": "<explain setup type, confluence, why chosen>"
+    }},
+
+    "short_assessment": {{
+        "status": "none" | "waiting" | "ready",
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
+        "entry_plan": <price or null>,
+        "stop_plan": <price or null>,
+        "raw_target": <target before buffer or null>,
+        "target_plan": <final target WITH 5pt buffer applied or null>,
+        "risk_reward": <ratio calculated with final target or null>,
+        "confidence": <0.0-1.0>,
+        "reasoning": "<explain setup type, confluence, why chosen>"
+    }},
+
+    "primary_decision": "LONG" | "SHORT" | "NONE" | "EXIT",
+    "overall_reasoning": "<incremental update: what changed from previous bar, should we trade or continue waiting>",
+
+    "long_setup": {{
+        "setup_type": <from long_assessment>,
+        "entry": <entry_plan from long_assessment>,
+        "stop": <stop_plan from long_assessment>,
+        "target": <target_plan (WITH buffer) from long_assessment>,
+        "risk_reward": <ratio from long_assessment>,
+        "confidence": <confidence from long_assessment>,
+        "reasoning": "<reasoning from long_assessment>"
+    }},
+
+    "short_setup": {{
+        "setup_type": <from short_assessment>,
+        "entry": <entry_plan from short_assessment>,
+        "stop": <stop_plan from short_assessment>,
+        "target": <target_plan (WITH buffer) from short_assessment>,
+        "risk_reward": <ratio from short_assessment>,
+        "confidence": <confidence from short_assessment>,
+        "reasoning": "<reasoning from short_assessment>"
+    }}
+}}
+
+IMPORTANT: The long_setup and short_setup fields must be populated for backward compatibility,
+but your PRIMARY analysis should be in long_assessment and short_assessment.
+Only set primary_decision to LONG/SHORT if the corresponding assessment status is "ready".
 """
+
+    def build_prompt(
+        self,
+        fvg_context: Dict[str, Any],
+        market_data: Dict[str, Any],
+        memory_context: Optional[Dict[str, Any]] = None,
+        previous_analysis: Optional[str] = None,
+        htf_context: Optional[str] = None,
+        open_position: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """
+        Build dynamic per-bar user message. The static system prompt lives in
+        _build_system_prompt() and is sent separately with cache_control.
+        """
+        prompt = ""
+
+        # Add previous analysis if available
+        if previous_analysis:
+            prompt += previous_analysis + "\n"
 
         if htf_context:
             prompt += f"\n{htf_context}\n"
@@ -429,169 +589,6 @@ FVG-Only Trades: {stats['total_trades']} trades, {stats['win_rate']*100:.1f}% wi
 Average R/R: {stats['avg_rr']:.2f}:1
 """
 
-        # Add decision criteria
-        prompt += f"""
-DECISION CRITERIA:
-==================
-- Minimum Risk/Reward: {self.min_risk_reward}:1 (calculated from actual prices — not self-reported)
-- Stop Loss Range: {self.stop_loss_min}-{self.stop_loss_max} points
-- Confidence Threshold: {self.confidence_threshold}
-
-STOP LOSS PHILOSOPHY — DYNAMIC, STRUCTURE-BASED:
-=================================================
-Stops are placed at the level where the trade thesis is DEFINITIVELY WRONG.
-Never use a fixed default. Size each stop to the current structure and setup type.
-
-STEP 1 — Identify the invalidation level for this specific trade right now:
-  FVG_FILL SHORT: The thesis breaks if price reclaims the level it was rejected from.
-    → Stop = nearest resistance ABOVE entry (nearest psychological level, nearest EMA above, or recent swing high) + 5pt buffer.
-    → If entry is within 15pts of a psych level: stop = psych_level + 5pts.
-    → If no clear level nearby: stop = entry + (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
-
-  FVG_FILL LONG: The thesis breaks if price loses the support it bounced from.
-    → Stop = nearest support BELOW entry (nearest psychological level, nearest EMA below, or recent swing low) - 5pt buffer.
-    → If entry is within 15pts of a psych level: stop = psych_level - 5pts.
-    → If no clear level nearby: stop = entry - (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
-
-  EMA_BOUNCE LONG: Stop = EMA that price bounced from - 10pts.
-  EMA_BOUNCE SHORT: Stop = EMA that price bounced from + 10pts.
-
-  LEVEL_TRADE: Stop = the key level ± 10pts (beyond the level being traded).
-
-  MOMENTUM / COUNTER_TREND: Stop = most recent swing high (SHORT) or swing low (LONG) + 5pt buffer.
-
-  KELTNER_BOUNCE LONG: Thesis is that price bounced off the Keltner lower band.
-    → Stop = Keltner lower band value at entry - 8pts.
-    → Target = Keltner midline (mean-reversion target).
-    → If stochastic is not yet below 20, wait — do not pre-empt the signal.
-
-  KELTNER_BOUNCE SHORT: Thesis is that price rejected at the Keltner upper band.
-    → Stop = Keltner upper band value at entry + 8pts.
-    → Target = Keltner midline.
-    → If stochastic is not yet above 80, wait — do not pre-empt the signal.
-
-  SWEEP_FVG LONG: Price swept a recent swing low (trapping shorts) then entered a bullish FVG.
-    → Stop = the swing low level that was swept - 5pts (below the trap level).
-    → Target = next bearish FVG above or next swing high.
-    → The sweep must have occurred within the last 5 bars. Stale sweeps do not count.
-
-  SWEEP_FVG SHORT: Price swept a recent swing high (trapping longs) then entered a bearish FVG.
-    → Stop = the swing high level that was swept + 5pts (above the trap level).
-    → Target = next bullish FVG below or next swing low.
-    → The sweep must have occurred within the last 5 bars.
-
-  HA_TREND LONG: First bullish Heikin Ashi flip (bearish → bullish candle) with EMA21 rising.
-    → Stop = low of the first bullish HA candle in the sequence - 5pts.
-    → Target = nearest resistance (FVG above, EMA level, or psychological level).
-    → Only valid if EMA21 > EMA75 OR price is above EMA21. Do not trade HA flips into downtrends.
-
-  HA_TREND SHORT: First bearish Heikin Ashi flip (bullish → bearish candle) with EMA21 falling.
-    → Stop = high of the first bearish HA candle in the sequence + 5pts.
-    → Target = nearest support (FVG below, EMA level, or psychological level).
-    → Only valid if EMA21 < EMA75 OR price is below EMA21. Do not trade HA flips into uptrends.
-
-STEP 2 — Verify the math before committing:
-  risk  = abs(entry - stop)
-  reward = abs(target - entry)
-  R/R   = reward / risk
-
-  If R/R < {self.min_risk_reward}: DO NOT take the trade. Do not argue exceptions.
-  If R/R ≥ {self.min_risk_reward}: setup is valid.
-
-STEP 3 — Report the stop you calculated, not a rounded guess.
-  The risk_reward field in your JSON MUST match abs(target - entry) / abs(stop - entry) exactly.
-  Do not write a different number in risk_reward than your math produces.
-
-ANALYSIS REQUIRED:
-==================
-You MUST provide a COMPLETE response with both long_assessment and short_assessment.
-
-IMPORTANT: If you don't see a quality setup, that's COMPLETELY ACCEPTABLE.
-- Use status: "none" for assessments with no valid setup
-- Use status: "waiting" for setups you're monitoring but not ready to trade
-- Use status: "ready" for setups that meet all criteria and are tradeable NOW
-
-For EACH assessment (long and short):
-1. Determine status: "none", "waiting", or "ready"
-2. If status is NOT "none", provide:
-   - Setup Type: Choose ONE: FVG_FILL, EMA_BOUNCE, MOMENTUM, LEVEL_TRADE, COUNTER_TREND, KELTNER_BOUNCE, SWEEP_FVG, or HA_TREND
-   - Entry price: Current price or nearby entry level
-   - Raw Target: Your identified target level BEFORE buffer
-   - Final Target: Apply 5pt buffer (LONG: raw - 5, SHORT: raw + 5)
-   - Stop loss: Structure-based per the rules above — NOT a fixed number
-   - Risk/Reward ratio: reward / risk using your actual prices — must match exactly
-   - Confidence level (0.0-1.0)
-   - Reasoning: Identify the invalidation level, explain stop placement, show R/R math
-3. If status is "none", explain why no setup exists
-
-Update Your Assessment Based On:
-- What changed from previous analysis?
-- Has the invalidation level shifted?
-- FVG quality and proximity
-- EMA trend alignment
-- Stochastic momentum direction and level
-- How long you've been tracking this setup (setup_age_bars)
-- Whether you should keep waiting or abandon the setup
-
-Respond in JSON format:
-{{
-    "current_bar_index": <increment from previous or 0 if first>,
-    "overall_bias": "bullish" | "bearish" | "neutral",
-    "waiting_for": "<describe what you're waiting for, or 'No quality setup' if none>",
-
-    "long_assessment": {{
-        "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
-        "entry_plan": <price or null>,
-        "stop_plan": <price or null>,
-        "raw_target": <target before buffer or null>,
-        "target_plan": <final target WITH 5pt buffer applied or null>,
-        "risk_reward": <ratio calculated with final target or null>,
-        "confidence": <0.0-1.0>,
-        "reasoning": "<explain setup type, confluence, why chosen>"
-    }},
-
-    "short_assessment": {{
-        "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
-        "entry_plan": <price or null>,
-        "stop_plan": <price or null>,
-        "raw_target": <target before buffer or null>,
-        "target_plan": <final target WITH 5pt buffer applied or null>,
-        "risk_reward": <ratio calculated with final target or null>,
-        "confidence": <0.0-1.0>,
-        "reasoning": "<explain setup type, confluence, why chosen>"
-    }},
-
-    "primary_decision": "LONG" | "SHORT" | "NONE" | "EXIT",
-    "overall_reasoning": "<incremental update: what changed from previous bar, should we trade or continue waiting>",
-
-    "long_setup": {{
-        "setup_type": <from long_assessment>,
-        "entry": <entry_plan from long_assessment>,
-        "stop": <stop_plan from long_assessment>,
-        "target": <target_plan (WITH buffer) from long_assessment>,
-        "risk_reward": <ratio from long_assessment>,
-        "confidence": <confidence from long_assessment>,
-        "reasoning": "<reasoning from long_assessment>"
-    }},
-
-    "short_setup": {{
-        "setup_type": <from short_assessment>,
-        "entry": <entry_plan from short_assessment>,
-        "stop": <stop_plan from short_assessment>,
-        "target": <target_plan (WITH buffer) from short_assessment>,
-        "risk_reward": <ratio from short_assessment>,
-        "confidence": <confidence from short_assessment>,
-        "reasoning": "<reasoning from short_assessment>"
-    }}
-}}
-
-IMPORTANT: The long_setup and short_setup fields must be populated for backward compatibility,
-but your PRIMARY analysis should be in long_assessment and short_assessment.
-Only set primary_decision to LONG/SHORT if the corresponding assessment status is "ready".
-"""
-
         return prompt
 
     def parse_claude_response(self, response_text: str) -> Optional[Dict[str, Any]]:
@@ -758,7 +755,7 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         Returns:
             Decision dictionary with validation status
         """
-        # Build prompt
+        # Build dynamic per-bar user message (system prompt is cached separately)
         prompt = self.build_prompt(fvg_context, market_data, memory_context, previous_analysis, htf_context, open_position)
 
         try:
@@ -766,6 +763,8 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
             logger.debug("="*60)
             logger.debug("SENDING TO CLAUDE:")
             logger.debug("="*60)
+            logger.debug(self._system_prompt)
+            logger.debug("--- USER MESSAGE ---")
             logger.debug(prompt)
             logger.debug("="*60)
 
@@ -793,7 +792,7 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
             anim_thread = threading.Thread(target=animate_dots, daemon=True)
             anim_thread.start()
 
-            # Query Claude with retry logic
+            # Query Claude with retry logic (system prompt cached, user message dynamic)
             response = self.query_claude_with_retry(prompt, max_retries=5)
 
             # Stop animation
