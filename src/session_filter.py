@@ -83,15 +83,15 @@ class SessionFilter:
         return s <= t < e
 
     def is_trading_allowed(self, dt: Optional[datetime] = None) -> tuple[bool, str]:
-        if not self.enabled:
-            return True, "Session filter disabled"
-
         t = self._get_et_time(dt)
 
-        # NY open blackout — block first X minutes of NY session
+        # NY open blackout runs regardless of master enabled flag
         if self.avoid_ny_open and self.ny_open_blackout_start <= t < self.ny_open_blackout_end:
             end_str = self.ny_open_blackout_end.strftime('%H:%M')
             return False, f"NY open blackout until {end_str} ET (volatile first {(self.ny_open_blackout_end.hour * 60 + self.ny_open_blackout_end.minute) - 570}min)"
+
+        if not self.enabled:
+            return True, "Session filter disabled"
 
         # Lunch block (only matters if inside an otherwise allowed session)
         in_lunch = self.avoid_lunch and self.lunch_start <= t < self.lunch_end
