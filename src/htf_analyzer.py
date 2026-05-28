@@ -30,6 +30,22 @@ class HTFAnalyzer:
             df = df.sort_values('DateTime').reset_index(drop=True)
             if len(df) < self.ema_slow + 5:
                 return None
+
+            # Splice in the current in-progress bar if available
+            current_path = self.htf_path.parent / (self.htf_path.stem + '_current.csv')
+            if current_path.exists():
+                try:
+                    cur = pd.read_csv(current_path)
+                    cur['DateTime'] = pd.to_datetime(cur['DateTime'])
+                    cur['Intrabar'] = True
+                    last_closed = df['DateTime'].iloc[-1]
+                    cur = cur[cur['DateTime'] > last_closed]
+                    if not cur.empty:
+                        df = pd.concat([df, cur[['DateTime', 'Open', 'High', 'Low', 'Close']]], ignore_index=True)
+                        logger.debug(f"HTF: spliced intrabar current bar at {cur['DateTime'].iloc[-1]}")
+                except Exception as e:
+                    logger.debug(f"HTF current bar read skipped: {e}")
+
             df['EMA_fast'] = df['Close'].ewm(span=self.ema_fast, adjust=False).mean()
             df['EMA_slow'] = df['Close'].ewm(span=self.ema_slow, adjust=False).mean()
             return df
@@ -58,6 +74,7 @@ class HTFAnalyzer:
         ema_fast  = last['EMA_fast']
         ema_slow  = last['EMA_slow']
         bar_time  = last['DateTime']
+        intrabar  = bool(last.get('Intrabar', False))
 
         # Bias from EMA alignment
         # EMA bias
@@ -97,9 +114,10 @@ class HTFAnalyzer:
             bias    = 'neutral'
             advice  = "No directional bias — EMA and structure both neutral. Require high confluence."
 
+        bar_label = "Current bar (intrabar)" if intrabar else "Last bar"
         prompt_section = (
             f"{label}:\n"
-            f"  Last bar: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
+            f"  {bar_label}: {bar_time.strftime('%m/%d %H:%M')} | Close: {price:.2f}\n"
             f"  EMA bias:       {ema_str}\n"
             f"  Structure bias: {struct_str}\n"
             f"  Combined:       {bias.upper()} — {advice}\n"
