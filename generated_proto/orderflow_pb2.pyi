@@ -1,0 +1,83 @@
+from google.protobuf import descriptor as _descriptor
+from google.protobuf import message as _message
+from typing import ClassVar as _ClassVar, Optional as _Optional
+
+DESCRIPTOR: _descriptor.FileDescriptor
+
+class Orderflow(_message.Message):
+    __slots__ = ("timestamp", "ticker", "spot", "zero_major_long_gamma", "zero_major_short_gamma", "one_major_long_gamma", "one_major_short_gamma", "zero_major_call_gamma", "zero_major_put_gamma", "one_major_call_gamma", "one_major_put_gamma", "zero_convexity_ratio", "one_convexity_ratio", "zero_gex_ratio", "one_gex_ratio", "zero_net_vanna", "one_net_vanna", "zero_net_charm", "one_net_charm", "zero_agg_total_dex", "one_agg_total_dex", "zero_agg_call_dex", "one_agg_call_dex", "zero_agg_put_dex", "one_agg_put_dex", "zero_net_total_dex", "one_net_total_dex", "zero_net_call_dex", "one_net_call_dex", "zero_net_put_dex", "one_net_put_dex", "dex_orderflow", "gex_orderflow", "convexity_orderflow", "one_dex_orderflow", "one_gex_orderflow", "one_convexity_orderflow")
+    TIMESTAMP_FIELD_NUMBER: _ClassVar[int]
+    TICKER_FIELD_NUMBER: _ClassVar[int]
+    SPOT_FIELD_NUMBER: _ClassVar[int]
+    ZERO_MAJOR_LONG_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ZERO_MAJOR_SHORT_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ONE_MAJOR_LONG_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ONE_MAJOR_SHORT_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ZERO_MAJOR_CALL_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ZERO_MAJOR_PUT_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ONE_MAJOR_CALL_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ONE_MAJOR_PUT_GAMMA_FIELD_NUMBER: _ClassVar[int]
+    ZERO_CONVEXITY_RATIO_FIELD_NUMBER: _ClassVar[int]
+    ONE_CONVEXITY_RATIO_FIELD_NUMBER: _ClassVar[int]
+    ZERO_GEX_RATIO_FIELD_NUMBER: _ClassVar[int]
+    ONE_GEX_RATIO_FIELD_NUMBER: _ClassVar[int]
+    ZERO_NET_VANNA_FIELD_NUMBER: _ClassVar[int]
+    ONE_NET_VANNA_FIELD_NUMBER: _ClassVar[int]
+    ZERO_NET_CHARM_FIELD_NUMBER: _ClassVar[int]
+    ONE_NET_CHARM_FIELD_NUMBER: _ClassVar[int]
+    ZERO_AGG_TOTAL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_AGG_TOTAL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ZERO_AGG_CALL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_AGG_CALL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ZERO_AGG_PUT_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_AGG_PUT_DEX_FIELD_NUMBER: _ClassVar[int]
+    ZERO_NET_TOTAL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_NET_TOTAL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ZERO_NET_CALL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_NET_CALL_DEX_FIELD_NUMBER: _ClassVar[int]
+    ZERO_NET_PUT_DEX_FIELD_NUMBER: _ClassVar[int]
+    ONE_NET_PUT_DEX_FIELD_NUMBER: _ClassVar[int]
+    DEX_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    GEX_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    CONVEXITY_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    ONE_DEX_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    ONE_GEX_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    ONE_CONVEXITY_ORDERFLOW_FIELD_NUMBER: _ClassVar[int]
+    timestamp: int
+    ticker: str
+    spot: int
+    zero_major_long_gamma: int
+    zero_major_short_gamma: int
+    one_major_long_gamma: int
+    one_major_short_gamma: int
+    zero_major_call_gamma: int
+    zero_major_put_gamma: int
+    one_major_call_gamma: int
+    one_major_put_gamma: int
+    zero_convexity_ratio: int
+    one_convexity_ratio: int
+    zero_gex_ratio: int
+    one_gex_ratio: int
+    zero_net_vanna: int
+    one_net_vanna: int
+    zero_net_charm: int
+    one_net_charm: int
+    zero_agg_total_dex: int
+    one_agg_total_dex: int
+    zero_agg_call_dex: int
+    one_agg_call_dex: int
+    zero_agg_put_dex: int
+    one_agg_put_dex: int
+    zero_net_total_dex: int
+    one_net_total_dex: int
+    zero_net_call_dex: int
+    one_net_call_dex: int
+    zero_net_put_dex: int
+    one_net_put_dex: int
+    dex_orderflow: int
+    gex_orderflow: int
+    convexity_orderflow: int
+    one_dex_orderflow: int
+    one_gex_orderflow: int
+    one_convexity_orderflow: int
+    def __init__(self, timestamp: _Optional[int] = ..., ticker: _Optional[str] = ..., spot: _Optional[int] = ..., zero_major_long_gamma: _Optional[int] = ..., zero_major_short_gamma: _Optional[int] = ..., one_major_long_gamma: _Optional[int] = ..., one_major_short_gamma: _Optional[int] = ..., zero_major_call_gamma: _Optional[int] = ..., zero_major_put_gamma: _Optional[int] = ..., one_major_call_gamma: _Optional[int] = ..., one_major_put_gamma: _Optional[int] = ..., zero_convexity_ratio: _Optional[int] = ..., one_convexity_ratio: _Optional[int] = ..., zero_gex_ratio: _Optional[int] = ..., one_gex_ratio: _Optional[int] = ..., zero_net_vanna: _Optional[int] = ..., one_net_vanna: _Optional[int] = ..., zero_net_charm: _Optional[int] = ..., one_net_charm: _Optional[int] = ..., zero_agg_total_dex: _Optional[int] = ..., one_agg_total_dex: _Optional[int] = ..., zero_agg_call_dex: _Optional[int] = ..., one_agg_call_dex: _Optional[int] = ..., zero_agg_put_dex: _Optional[int] = ..., one_agg_put_dex: _Optional[int] = ..., zero_net_total_dex: _Optional[int] = ..., one_net_total_dex: _Optional[int] = ..., zero_net_call_dex: _Optional[int] = ..., one_net_call_dex: _Optional[int] = ..., zero_net_put_dex: _Optional[int] = ..., one_net_put_dex: _Optional[int] = ..., dex_orderflow: _Optional[int] = ..., gex_orderflow: _Optional[int] = ..., convexity_orderflow: _Optional[int] = ..., one_dex_orderflow: _Optional[int] = ..., one_gex_orderflow: _Optional[int] = ..., one_convexity_orderflow: _Optional[int] = ...) -> None: ...

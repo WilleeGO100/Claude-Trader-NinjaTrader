@@ -34,6 +34,7 @@ from src.setup_quality import compute_setup_quality
 from src.gamma_level_loader import GammaLevelLoader
 from src.order_flow_reader import OrderFlowReader
 from src.dom_analyzer import DOMAnalyzer
+from src.gexbot_feed import GexbotFeed
 
 # Load environment variables
 load_dotenv()
@@ -111,6 +112,8 @@ class TradingOrchestrator:
         self.gamma         = GammaLevelLoader()
         self.order_flow    = OrderFlowReader()
         self.dom           = DOMAnalyzer()
+        self.gexbot        = GexbotFeed(gamma_loader=self.gamma)
+        self.gexbot.start()
 
         # Scan for upcoming news events at startup
         try:
