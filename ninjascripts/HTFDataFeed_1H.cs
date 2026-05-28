@@ -11,23 +11,24 @@ using NinjaTrader.NinjaScript.Strategies;
 // Apply this strategy to a 1-HOUR NQ chart.
 // Writes two files:
 //   HistoricalData_1H.csv         — completed 1H bars (on bar close)
-//   HistoricalData_1H_current.csv — current in-progress bar OHLC (every tick)
-// Python reads both for real-time bias without waiting for bar close.
+//   HistoricalData_1H_current.csv — current in-progress bar OHLC (throttled to every 10s)
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
     public class HTFDataFeed_1H : Strategy
     {
-        private string filePath;
-        private string currentBarPath;
-        private bool   isFileInitialized = false;
-        private bool   isFirstBar        = true;
+        private string   filePath;
+        private string   currentBarPath;
+        private bool     isFileInitialized = false;
+        private bool     isFirstBar        = true;
+        private DateTime lastCurrentWrite  = DateTime.MinValue;
+        private const int WriteIntervalSec = 10;
 
         protected override void OnStateChange()
         {
             if (State == State.SetDefaults)
             {
-                Description         = "Exports 1H OHLC bars + live intrabar update for Claude Trader";
+                Description         = "Exports 1H OHLC bars + throttled intrabar update for Claude Trader";
                 Name                = "HTFDataFeed_1H";
                 Calculate           = Calculate.OnPriceChange;
                 BarsRequiredToTrade = 5;
@@ -58,14 +59,14 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
 
             if (IsFirstTickOfBar && !isFirstBar)
-            {
-                // Previous bar just closed — append it to historical file
-                // Time[1], Open[1] etc. are the just-closed bar
                 AppendClosedBar();
-            }
 
-            // Always overwrite current bar file with latest intrabar OHLC
-            WriteCurrentBar();
+            // Only write current bar file every N seconds to avoid freezing
+            if ((DateTime.Now - lastCurrentWrite).TotalSeconds >= WriteIntervalSec)
+            {
+                WriteCurrentBar();
+                lastCurrentWrite = DateTime.Now;
+            }
 
             isFirstBar = false;
         }
