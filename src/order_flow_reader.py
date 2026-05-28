@@ -88,10 +88,12 @@ class OrderFlowReader:
         # ── Delta direction (is delta turning?) ──────────────────────
         half   = len(recent) // 2
         if half > 0:
-            early_delta = int(recent.iloc[:half][recent['Side'] == 'A']['Size'].sum() -
-                               recent.iloc[:half][recent['Side'] == 'B']['Size'].sum())
-            late_delta  = int(recent.iloc[half:][recent['Side'] == 'A']['Size'].sum() -
-                               recent.iloc[half:][recent['Side'] == 'B']['Size'].sum())
+            early = recent.iloc[:half].copy()
+            late  = recent.iloc[half:].copy()
+            early_delta = int(early[early['Side'] == 'A']['Size'].sum() -
+                               early[early['Side'] == 'B']['Size'].sum())
+            late_delta  = int(late[late['Side'] == 'A']['Size'].sum() -
+                               late[late['Side'] == 'B']['Size'].sum())
             if late_delta > early_delta + 20:
                 delta_direction = 'turning_bullish'
             elif late_delta < early_delta - 20:
