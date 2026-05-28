@@ -243,14 +243,14 @@ PLAN B REQUIREMENT — mandatory when status is "waiting":
 
         # Inject open position context — critical for thesis management
         if open_position:
-            direction  = open_position['direction']
-            entry      = open_position['entry']
-            stop       = open_position['stop']
-            target     = open_position['target']
-            setup_type = open_position.get('setup_type', 'unknown')
-            ema21_entry = open_position.get('ema21_at_entry', 0)
-            bars_held  = open_position.get('bars_in_trade', 0)
-            current_ema21 = market_data.get('ema21', 0)
+            direction   = open_position['direction']
+            entry       = float(open_position.get('entry')       or 0)
+            stop        = float(open_position.get('stop')        or 0)
+            target      = float(open_position.get('target')      or 0)
+            setup_type  = open_position.get('setup_type', 'unknown')
+            ema21_entry = float(open_position.get('ema21_at_entry') or 0)
+            bars_held   = open_position.get('bars_in_trade', 0)
+            current_ema21 = market_data.get('ema21') or 0
             current_price = fvg_context['current_price']
 
             ema_status = ""
@@ -353,16 +353,16 @@ Nearest Bearish FVG ABOVE (LONG opportunity - FVG_FILL setup):
 EMA STRUCTURE & POTENTIAL SETUPS:
 ==================================
 Current Price: {fvg_context['current_price']:.2f}
-EMA21:  {market_data.get('ema21', 0):.2f} (distance: {fvg_context['current_price'] - market_data.get('ema21', 0):+.2f})
-EMA75:  {market_data.get('ema75', 0):.2f} (distance: {fvg_context['current_price'] - market_data.get('ema75', 0):+.2f})
-EMA150: {market_data.get('ema150', 0):.2f} (distance: {fvg_context['current_price'] - market_data.get('ema150', 0):+.2f})
+EMA21:  {(market_data.get('ema21') or 0):.2f} (distance: {fvg_context['current_price'] - (market_data.get('ema21') or 0):+.2f})
+EMA75:  {(market_data.get('ema75') or 0):.2f} (distance: {fvg_context['current_price'] - (market_data.get('ema75') or 0):+.2f})
+EMA150: {(market_data.get('ema150') or 0):.2f} (distance: {fvg_context['current_price'] - (market_data.get('ema150') or 0):+.2f})
 
 Trend & Setup Opportunities:
 """
         current_price = fvg_context['current_price']
-        ema21 = market_data.get('ema21', 0)
-        ema75 = market_data.get('ema75', 0)
-        ema150 = market_data.get('ema150', 0)
+        ema21  = market_data.get('ema21')  or 0
+        ema75  = market_data.get('ema75')  or 0
+        ema150 = market_data.get('ema150') or 0
 
         if ema21 > ema75 > ema150:
             prompt += "  Strong UPTREND (EMA21 > EMA75 > EMA150)\n"
@@ -380,7 +380,7 @@ Trend & Setup Opportunities:
             prompt += "  Neutral/Choppy - Avoid trend trades\n"
 
         # Add Stochastic momentum with setup ideas
-        stoch = market_data.get('stochastic', 50)
+        stoch = market_data.get('stochastic') or 50
         prompt += f"""
 MOMENTUM INDICATOR & SETUPS:
 =============================
