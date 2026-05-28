@@ -65,20 +65,23 @@ class FVGDisplay:
 
     def read_current_price(self):
         """Read current price from live feed (last line)"""
-        try:
-            if not os.path.exists(self.live_feed_path):
-                return None
+        for attempt in range(3):
+            try:
+                if not os.path.exists(self.live_feed_path):
+                    return None
 
-            df = pd.read_csv(self.live_feed_path)
-            if df.empty:
-                return None
+                df = pd.read_csv(self.live_feed_path)
+                if df.empty:
+                    return None
 
-            # Get the last line for current price
-            last_row = df.iloc[-1]
-            return float(last_row['Last'])
-        except Exception as e:
-            logger.error(f"Error reading current price: {e}")
-            return None
+                last_row = df.iloc[-1]
+                return float(last_row['Last'])
+            except Exception as e:
+                if attempt < 2:
+                    import time as _t; _t.sleep(0.05)
+                else:
+                    logger.error(f"Error reading current price: {e}")
+                    return None
         
 
     def find_fvgs_in_data(self, df, start_index=2):
