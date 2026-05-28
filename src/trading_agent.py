@@ -456,6 +456,36 @@ STEP 1 — Identify the invalidation level for this specific trade right now:
 
   MOMENTUM / COUNTER_TREND: Stop = most recent swing high (SHORT) or swing low (LONG) + 5pt buffer.
 
+  KELTNER_BOUNCE LONG: Thesis is that price bounced off the Keltner lower band.
+    → Stop = Keltner lower band value at entry - 8pts.
+    → Target = Keltner midline (mean-reversion target).
+    → If stochastic is not yet below 20, wait — do not pre-empt the signal.
+
+  KELTNER_BOUNCE SHORT: Thesis is that price rejected at the Keltner upper band.
+    → Stop = Keltner upper band value at entry + 8pts.
+    → Target = Keltner midline.
+    → If stochastic is not yet above 80, wait — do not pre-empt the signal.
+
+  SWEEP_FVG LONG: Price swept a recent swing low (trapping shorts) then entered a bullish FVG.
+    → Stop = the swing low level that was swept - 5pts (below the trap level).
+    → Target = next bearish FVG above or next swing high.
+    → The sweep must have occurred within the last 5 bars. Stale sweeps do not count.
+
+  SWEEP_FVG SHORT: Price swept a recent swing high (trapping longs) then entered a bearish FVG.
+    → Stop = the swing high level that was swept + 5pts (above the trap level).
+    → Target = next bullish FVG below or next swing low.
+    → The sweep must have occurred within the last 5 bars.
+
+  HA_TREND LONG: First bullish Heikin Ashi flip (bearish → bullish candle) with EMA21 rising.
+    → Stop = low of the first bullish HA candle in the sequence - 5pts.
+    → Target = nearest resistance (FVG above, EMA level, or psychological level).
+    → Only valid if EMA21 > EMA75 OR price is above EMA21. Do not trade HA flips into downtrends.
+
+  HA_TREND SHORT: First bearish Heikin Ashi flip (bullish → bearish candle) with EMA21 falling.
+    → Stop = high of the first bearish HA candle in the sequence + 5pts.
+    → Target = nearest support (FVG below, EMA level, or psychological level).
+    → Only valid if EMA21 < EMA75 OR price is below EMA21. Do not trade HA flips into uptrends.
+
 STEP 2 — Verify the math before committing:
   risk  = abs(entry - stop)
   reward = abs(target - entry)
@@ -480,7 +510,7 @@ IMPORTANT: If you don't see a quality setup, that's COMPLETELY ACCEPTABLE.
 For EACH assessment (long and short):
 1. Determine status: "none", "waiting", or "ready"
 2. If status is NOT "none", provide:
-   - Setup Type: Choose ONE: FVG_FILL, EMA_BOUNCE, MOMENTUM, LEVEL_TRADE, or COUNTER_TREND
+   - Setup Type: Choose ONE: FVG_FILL, EMA_BOUNCE, MOMENTUM, LEVEL_TRADE, COUNTER_TREND, KELTNER_BOUNCE, SWEEP_FVG, or HA_TREND
    - Entry price: Current price or nearby entry level
    - Raw Target: Your identified target level BEFORE buffer
    - Final Target: Apply 5pt buffer (LONG: raw - 5, SHORT: raw + 5)
@@ -507,7 +537,7 @@ Respond in JSON format:
 
     "long_assessment": {{
         "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | null,
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
         "entry_plan": <price or null>,
         "stop_plan": <price or null>,
         "raw_target": <target before buffer or null>,
@@ -519,7 +549,7 @@ Respond in JSON format:
 
     "short_assessment": {{
         "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | null,
+        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
         "entry_plan": <price or null>,
         "stop_plan": <price or null>,
         "raw_target": <target before buffer or null>,

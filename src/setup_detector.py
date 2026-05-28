@@ -10,6 +10,7 @@ These give Claude concrete Plan B options beyond FVG_FILL / EMA_BOUNCE,
 fixing the "locked on one setup, goes days without a trade" problem.
 """
 
+import math
 from collections import deque
 from typing import Dict, Any, Optional, List
 
@@ -100,7 +101,8 @@ class SetupDetector:
         close = float(market_data.get('close', market_data.get('current_price', 0)))
         high  = float(market_data.get('high', close))
         low   = float(market_data.get('low', close))
-        stoch = float(market_data.get('stochastic', 50))
+        _raw_stoch = market_data.get('stochastic', 50)
+        stoch = 50.0 if (_raw_stoch is None or (isinstance(_raw_stoch, float) and math.isnan(_raw_stoch))) else float(_raw_stoch)
 
         self._closes.append(close)
         self._highs.append(high)

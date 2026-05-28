@@ -4,6 +4,7 @@ Reads data/gamma_levels.json and provides gamma context for Claude's prompt
 and setup_quality scoring.
 
 Update gamma_levels.json before each session:
+  - GexBot (gexbot.com): NDX=>NQ ticker gives levels directly in NQ points (no conversion needed)
   - Market Chameleon (free): QQQ OI → multiply levels x 40 for NQ
   - SpotGamma ($50/mo): direct NQ gamma levels
   - Tradytics ($20/mo): QQQ proxy
