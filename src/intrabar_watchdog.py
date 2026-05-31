@@ -113,8 +113,22 @@ class IntrabarWatchdog:
                 logger.debug(f"Watchdog error: {e}")
             time.sleep(self.check_interval)
 
+    def _is_feed_stale(self, stale_minutes: int = 15) -> bool:
+        """Returns True if HistoricalData.csv hasn't been written to in stale_minutes.
+        Uses OS file modification time so Market Replay is treated as live."""
+        import time as _time
+        try:
+            age_mins = (_time.time() - self.historical_path.stat().st_mtime) / 60
+            return age_mins > stale_minutes
+        except Exception:
+            return True  # treat unreadable feed as stale
+
     def _check(self):
         if self._open_position or self._fired_this_bar or self._paused:
+            return
+
+        # Block when feed is stale — same threshold as main loop
+        if self._is_feed_stale():
             return
 
         # Respect session and news filters — same rules as main loop

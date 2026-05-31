@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "strategy-optimizer": {
+      "command": "C:/Users/jwmar/Claude-Trader-NinjaTrader/.venv/Scripts/python.exe",
+      "args": ["-m", "strategy_optimizer.mcp_server"],
+      "cwd": "C:/Users/jwmar/Claude-Trader-NinjaTrader"
+    }
+  }
+}

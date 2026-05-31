@@ -345,7 +345,7 @@ class FVGAnalyzer:
 
         if context['nearest_bullish_fvg']:
             fvg = context['nearest_bullish_fvg']
-            lines.append(f"\nNearest Bullish FVG BELOW (SHORT setup - price drawn down to fill gap):")
+            lines.append(f"\nNearest Bullish FVG BELOW (gap fill SHORT target OR long support in uptrend):")
             lines.append(f"  Zone: {fvg['bottom']:.2f} - {fvg['top']:.2f}")
             lines.append(f"  Size: {fvg['size']:.2f}pts")
             lines.append(f"  Distance to target: {fvg['distance']:+.2f}pts")
@@ -353,7 +353,7 @@ class FVGAnalyzer:
 
         if context['nearest_bearish_fvg']:
             fvg = context['nearest_bearish_fvg']
-            lines.append(f"\nNearest Bearish FVG ABOVE (LONG setup - price drawn up to fill gap):")
+            lines.append(f"\nNearest Bearish FVG ABOVE (gap fill LONG target OR short resistance in downtrend):")
             lines.append(f"  Zone: {fvg['bottom']:.2f} - {fvg['top']:.2f}")
             lines.append(f"  Size: {fvg['size']:.2f}pts")
             lines.append(f"  Distance to target: {fvg['distance']:+.2f}pts")

@@ -122,21 +122,38 @@ class GammaLevelLoader:
         put_wall  = levels['put_wall']
         regime    = self.get_regime(current_price)
 
+        dist_from_flip = current_price - flip
+        near_flip = abs(dist_from_flip) < 30   # within 30pts — borderline, don't over-weight
+
         regime_desc = {
-            'positive': 'POSITIVE GAMMA — MMs damping moves, range/mean-revert regime. Counter-trend setups more viable.',
-            'negative': 'NEGATIVE GAMMA — MMs amplifying moves, trending regime. Favor trend-following. Counter-trend needs extra confluence.',
+            'positive': (
+                'POSITIVE GAMMA — MMs damping moves. Range/mean-revert more likely near this level, '
+                'but ONLY if price is NOT in a sustained trend above EMA21+EMA75. '
+                'Do NOT use positive gamma alone to justify counter-trend shorts in a bull trend.'
+            ),
+            'negative': (
+                'NEGATIVE GAMMA — MMs amplifying moves, trending regime. Favor trend-following setups.'
+            ),
             'unknown':  'Regime unknown',
         }[regime]
 
+        near_flip_note = (
+            f"  NOTE: Price is only {abs(dist_from_flip):.0f}pts {'above' if dist_from_flip > 0 else 'below'} "
+            f"the flip — gamma regime is borderline, do not weight heavily.\n"
+            if near_flip else ""
+        )
+
         lines = [
             f"GAMMA LEVELS ({levels['source'].upper()}):",
-            f"  Gamma Flip: {flip:.0f} — price is {'ABOVE' if regime == 'positive' else 'BELOW'} flip ({current_price:.2f})",
+            f"  Gamma Flip: {flip:.0f} — price is {'ABOVE' if regime == 'positive' else 'BELOW'} flip ({current_price:.2f}, {dist_from_flip:+.0f}pts)",
         ]
         if call_wall:
             lines.append(f"  Call Wall:  {call_wall:.0f} (resistance/ceiling)")
         if put_wall:
             lines.append(f"  Put Wall:   {put_wall:.0f} (support/floor)")
         lines.append(f"  Regime: {regime_desc}")
+        if near_flip_note:
+            lines.append(near_flip_note.rstrip())
         lines.append("")
 
         return "\n".join(lines)

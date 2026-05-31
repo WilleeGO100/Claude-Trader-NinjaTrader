@@ -1,0 +1,211 @@
+{
+  "status": "completed",
+  "best_params": {
+    "rsi_period": 20,
+    "oversold": 38.04685587557792,
+    "overbought": 62.212312551297984,
+    "bb_period": 18,
+    "bb_std": 1.113068222276345,
+    "stop_atr": 1.313325826908161
+  },
+  "best_timeframe": "1h",
+  "best_score": 3.035,
+  "best_metrics": {
+    "train": {
+      "sharpe": 1.9637,
+      "sortino": 15.7366,
+      "calmar": 35.067,
+      "return_pct": 3.0428,
+      "max_dd_pct": -8.3434,
+      "win_rate": 57.1429,
+      "profit_factor": 1.3243,
+      "sqn": 0.2667,
+      "expectancy": 0.5105,
+      "avg_trade_pct": 0.4295,
+      "n_trades": 7.0,
+      "exposure_pct": 24.359
+    },
+    "test": {
+      "sharpe": 4.1064,
+      "sortino": 38.3153,
+      "calmar": 42.9457,
+      "return_pct": 1.3724,
+      "max_dd_pct": -5.7482,
+      "win_rate": 37.5,
+      "profit_factor": 1.2364,
+      "sqn": 0.2129,
+      "expectancy": 0.1943,
+      "avg_trade_pct": 0.1709,
+      "n_trades": 8.0,
+      "exposure_pct": 51.1905
+    },
+    "combined_sharpe": 3.035
+  },
+  "top_trials": [
+    {
+      "trial_id": 4,
+      "timeframe": "1h",
+      "params": {
+        "rsi_period": 20,
+        "oversold": 38.04685587557792,
+        "overbought": 62.212312551297984,
+        "bb_period": 18,
+        "bb_std": 1.113068222276345,
+        "stop_atr": 1.313325826908161
+      },
+      "train": {
+        "sharpe": 1.9637,
+        "sortino": 15.7366,
+        "calmar": 35.067,
+        "return_pct": 3.0428,
+        "max_dd_pct": -8.3434,
+        "win_rate": 57.1429,
+        "profit_factor": 1.3243,
+        "sqn": 0.2667,
+        "expectancy": 0.5105,
+        "avg_trade_pct": 0.4295,
+        "n_trades": 7.0,
+        "exposure_pct": 24.359
+      },
+      "test": {
+        "sharpe": 4.1064,
+        "sortino": 38.3153,
+        "calmar": 42.9457,
+        "return_pct": 1.3724,
+        "max_dd_pct": -5.7482,
+        "win_rate": 37.5,
+        "profit_factor": 1.2364,
+        "sqn": 0.2129,
+        "expectancy": 0.1943,
+        "avg_trade_pct": 0.1709,
+        "n_trades": 8.0,
+        "exposure_pct": 51.1905
+      },
+      "score": 3.035
+    },
+    {
+      "trial_id": 1,
+      "timeframe": "1h",
+      "params": {
+        "rsi_period": 15,
+        "oversold": 38.767857660247905,
+        "overbought": 78.29984854528513,
+        "bb_period": 34,
+        "bb_std": 1.3900466011060912,
+        "stop_atr": 0.8899863008405067
+      },
+      "train": {
+        "sharpe": 1.1238,
+        "sortino": 0.0,
+        "calmar": 10226.0752,
+        "return_pct": 14.4317,
+        "max_dd_pct": -4.5766,
+        "win_rate": 40.0,
+        "profit_factor": 4.2953,
+        "sqn": 1.0489,
+        "expectancy": 2.8806,
+        "avg_trade_pct": 2.7366,
+        "n_trades": 5.0,
+        "exposure_pct": 17.3077
+      },
+      "test": {
+        "sharpe": -16.1878,
+        "sortino": -1.7487,
+        "calmar": -11.2381,
+        "return_pct": 0.3605,
+        "max_dd_pct": -8.1861,
+        "win_rate": 40.0,
+        "profit_factor": 1.0963,
+        "sqn": 0.0517,
+        "expectancy": 0.1094,
+        "avg_trade_pct": 0.0715,
+        "n_trades": 5.0,
+        "exposure_pct": 40.4762
+      },
+      "score": -7.532
+    },
+    {
+      "trial_id": 2,
+      "timeframe": "1h",
+      "params": {
+        "rsi_period": 8,
+        "oversold": 36.654403644373375,
+        "overbought": 75.02787529358022,
+        "bb_period": 39,
+        "bb_std": 1.0514612357395061,
+        "stop_atr": 2.9247746304049858
+      },
+      "train": {
+        "sharpe": 1.0417,
+        "sortino": 389.9496,
+        "calmar": 1355.4039,
+        "return_pct": 11.4472,
+        "max_dd_pct": -10.2884,
+        "win_rate": 75.0,
+        "profit_factor": 1.8757,
+        "sqn": 0.6648,
+        "expectancy": 1.5241,
+        "avg_trade_pct": 1.3664,
+        "n_trades": 8.0,
+        "exposure_pct": 47.4359
+      },
+      "test": {
+        "sharpe": -64.2182,
+        "sortino": -1.2237,
+        "calmar": -7.1454,
+        "return_pct": -4.3463,
+        "max_dd_pct": -13.8731,
+        "win_rate": 33.3333,
+        "profit_factor": 0.546,
+        "sqn": -0.4493,
+        "expectancy": -1.7321,
+        "avg_trade_pct": -1.8951,
+        "n_trades": 3.0,
+        "exposure_pct": 50.0
+      },
+      "score": -31.5883
+    },
+    {
+      "trial_id": 3,
+      "timeframe": "1h",
+      "params": {
+        "rsi_period": 7,
+        "oversold": 37.73301005196955,
+        "overbought": 66.46949954000043,
+        "bb_period": 37,
+        "bb_std": 1.7792776902235274,
+        "stop_atr": 1.800170052944527
+      },
+      "train": {
+        "sharpe": 1.2633,
+        "sortino": 97.0764,
+        "calmar": 364.3957,
+        "return_pct": 7.4447,
+        "max_dd_pct": -6.9906,
+        "win_rate": 57.1429,
+        "profit_factor": 1.7499,
+        "sqn": 0.5403,
+        "expectancy": 1.1687,
+        "avg_trade_pct": 1.0625,
+        "n_trades": 7.0,
+        "exposure_pct": 39.7436
+      },
+      "test": {
+        "sharpe": -1690.1286,
+        "sortino": -1.8629,
+        "calmar": -10.9031,
+        "return_pct": -9.15,
+        "max_dd_pct": -9.15,
+        "win_rate": 25.0,
+        "profit_factor": 0.2134,
+        "sqn": -1.4333,
+        "expectancy": -2.3343,
+        "avg_trade_pct": -2.3752,
+        "n_trades": 4.0,
+        "exposure_pct": 32.1429
+      },
+      "score": -844.4326
+    }
+  ],
+  "total_trials": 4
+}

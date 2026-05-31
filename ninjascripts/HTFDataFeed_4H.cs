@@ -14,7 +14,7 @@ using NinjaTrader.NinjaScript.Strategies;
 
 namespace NinjaTrader.NinjaScript.Strategies
 {
-    public class HTFDataFeed : Strategy
+    public class HTFDataFeed_4H : Strategy
     {
         private string filePath;
         private bool isFileInitialized = false;
@@ -23,8 +23,8 @@ namespace NinjaTrader.NinjaScript.Strategies
         {
             if (State == State.SetDefaults)
             {
-                Description         = "Exports 4H OHLC bars for Claude Trader HTF context";
-                Name                = "HTFDataFeed";
+                Description         = "Exports 4H OHLC bars for Claude Trader HTF macro bias context";
+                Name                = "HTFDataFeed_4H";
                 Calculate           = Calculate.OnBarClose;
                 BarsRequiredToTrade = 5;
                 EntriesPerDirection = 1;
@@ -34,7 +34,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             else if (State == State.DataLoaded)
             {
                 filePath = OutputFilePath;
-                Print($"HTFDataFeed ready — writing to {filePath}");
+                Print($"HTFDataFeed_4H ready — writing to {filePath}");
             }
         }
 
@@ -61,7 +61,7 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             catch (Exception ex)
             {
-                Print($"HTFDataFeed error initializing file: {ex.Message}");
+                Print($"HTFDataFeed_4H error initializing file: {ex.Message}");
             }
         }
 
@@ -74,13 +74,13 @@ namespace NinjaTrader.NinjaScript.Strategies
             }
             catch (Exception ex)
             {
-                Print($"HTFDataFeed error writing bar: {ex.Message}");
+                Print($"HTFDataFeed_4H error writing bar: {ex.Message}");
             }
         }
 
         #region Properties
         [NinjaScriptProperty]
-        [Display(Name = "Output File Path", Order = 1, GroupName = "HTFDataFeed")]
+        [Display(Name = "Output File Path", Order = 1, GroupName = "HTFDataFeed_4H")]
         public string OutputFilePath { get; set; }
         #endregion
     }

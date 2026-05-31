@@ -27,7 +27,7 @@ class HTFAnalyzer:
         try:
             df = pd.read_csv(self.htf_path)
             df['DateTime'] = pd.to_datetime(df['DateTime'])
-            df = df.sort_values('DateTime').reset_index(drop=True)
+            df = df.sort_values('DateTime').drop_duplicates(subset='DateTime').reset_index(drop=True)
             if len(df) < self.ema_slow + 5:
                 return None
 
@@ -195,20 +195,23 @@ class HTFAnalyzer:
 
 class CombinedHTFAnalyzer:
     """
-    Two-layer HTF bias: 4H sets the macro trend, 1H fills in intraday structure.
+    Two-layer HTF bias: 1H drives intraday direction; 4H adds confluence, never veto.
 
     Gate hierarchy:
-      - 4H bullish  + 1H bullish  → strong bullish  (block SHORTs hard)
-      - 4H bullish  + 1H bearish  → bullish caution  (4H wins; SHORTs blocked, LONGs need conf >= 0.70)
-      - 4H bullish  + 1H neutral  → mild bullish     (SHORTs blocked)
-      - 4H bearish  + 1H bearish  → strong bearish   (block LONGs hard)
-      - 4H bearish  + 1H bullish  → bearish caution  (4H wins; LONGs blocked, SHORTs need conf >= 0.70)
-      - 4H bearish  + 1H neutral  → mild bearish     (LONGs blocked)
-      - 4H neutral  + 1H bullish  → mild bullish     (SHORTs need conf >= 0.75)
-      - 4H neutral  + 1H bearish  → mild bearish     (LONGs need conf >= 0.75)
-      - 4H neutral  + 1H neutral  → neutral          (both need conf >= 0.75)
-      - 4H unknown               → fall back to 1H only
-      - Both unknown             → unknown (conf >= 0.75 required)
+      - 4H bullish  + 1H bullish  → strong bullish   (block SHORTs — both agree)
+      - 4H bullish  + 1H bearish  → neutral           (conflict — follow LTF price action)
+      - 4H bullish  + 1H neutral  → mild bullish      (SHORTs need conf >= 0.70)
+      - 4H bearish  + 1H bearish  → strong bearish    (block LONGs — both agree)
+      - 4H bearish  + 1H bullish  → neutral           (conflict — follow LTF price action)
+      - 4H bearish  + 1H neutral  → mild bearish      (LONGs need conf >= 0.70)
+      - 4H neutral  + 1H bullish  → mild bullish      (SHORTs need conf >= 0.75)
+      - 4H neutral  + 1H bearish  → mild bearish      (LONGs need conf >= 0.75)
+      - 4H neutral  + 1H neutral  → neutral           (both need conf >= 0.75)
+      - 4H unknown                → fall back to 1H only
+      - Both unknown              → unknown (conf >= 0.75 required)
+
+    Intrabar override: if price reclaims EMA21, even strong/mild bias is downgraded
+    to neutral immediately — closed-bar 4H structure loses its veto on live price.
     """
 
     def __init__(
@@ -234,6 +237,7 @@ class CombinedHTFAnalyzer:
 
         combined, strength, counter_conf = self._combine(b4, b1)
 
+        # 1H leads — 4H is background context shown after
         section_4h = bias_4h.get('prompt_section', '  4H data not available\n')
         section_1h = bias_1h.get('prompt_section', '  1H data not available\n')
 
@@ -241,8 +245,9 @@ class CombinedHTFAnalyzer:
 
         prompt_section = (
             f"MULTI-TIMEFRAME BIAS:\n"
-            f"{section_4h}"
             f"{section_1h}"
+            f"4H BACKGROUND CONTEXT (lower priority — use as confluence, not a veto):\n"
+            f"{section_4h}"
             f"  Combined verdict: {combined.upper()} ({strength}) — {advice}\n"
         )
 
@@ -257,26 +262,30 @@ class CombinedHTFAnalyzer:
         }
 
     def _combine(self, b4: str, b1: str):
-        """Returns (combined_bias, strength, counter_conf_required)."""
+        """Returns (combined_bias, strength, counter_conf_required).
+
+        4H is background context — it can add confluence but never veto
+        a trade on its own. Disagreeing timeframes resolve to neutral.
+        Only when BOTH timeframes agree does the bias block counter-trades.
+        """
         if b4 == 'unknown':
-            # Fall back to 1H only
             if b1 == 'unknown':
                 return 'unknown', 'none', 0.75
             return b1, 'mild', 0.75
 
         if b4 == 'bullish':
             if b1 == 'bullish':
-                return 'bullish', 'strong', 1.0    # hard block on counter
+                return 'bullish', 'strong', 1.0    # both agree — hard block counter
             if b1 == 'bearish':
-                return 'bullish', 'caution', 0.70  # 4H wins, but 1H diverging
-            return 'bullish', 'mild', 1.0           # neutral 1H — still block counter
+                return 'neutral', 'none', 0.70     # timeframes disagree — go neutral
+            return 'bullish', 'mild', 0.70          # 4H bullish, 1H flat — soft caution only
 
         if b4 == 'bearish':
             if b1 == 'bearish':
-                return 'bearish', 'strong', 1.0
+                return 'bearish', 'strong', 1.0    # both agree — hard block counter
             if b1 == 'bullish':
-                return 'bearish', 'caution', 0.70
-            return 'bearish', 'mild', 1.0
+                return 'neutral', 'none', 0.70     # timeframes disagree — go neutral
+            return 'bearish', 'mild', 0.70          # 4H bearish, 1H flat — soft caution only
 
         # 4H neutral — defer to 1H
         if b1 == 'bullish':
@@ -287,13 +296,13 @@ class CombinedHTFAnalyzer:
 
     def _advice(self, b4, b1, combined, strength, counter_conf):
         if strength == 'strong':
-            return f"4H and 1H both {combined} — favor {combined.upper()[0:4]}s only"
-        if strength == 'caution':
             opp = 'SHORT' if combined == 'bullish' else 'LONG'
-            return f"4H {b4} overrides 1H {b1} divergence — {opp}s blocked; with-trend needs conf >= 0.70"
+            return f"4H and 1H both {combined} — {opp}s blocked; with-trend needs conf >= 0.65"
+        if strength == 'none' and combined == 'neutral' and b4 != 'neutral' and b1 != 'neutral':
+            return f"4H {b4} vs 1H {b1} — timeframes conflict; treat as neutral, follow LTF price action"
         if strength == 'mild' and b4 != 'neutral':
             opp = 'SHORT' if combined == 'bullish' else 'LONG'
-            return f"4H {b4}, 1H neutral — {opp}s blocked"
+            return f"4H {b4}, 1H neutral — {opp}s need conf >= {counter_conf:.2f}; LTF trend takes priority"
         if strength == 'mild' and b4 == 'neutral':
             opp = 'SHORT' if combined == 'bullish' else 'LONG'
             return f"4H neutral, 1H {b1} — {opp}s need conf >= 0.75"
@@ -328,41 +337,27 @@ class CombinedHTFAnalyzer:
         override_reason = None
 
         if combined == 'bearish':
-            if current_price > ema21 and current_price > ema75:
+            if current_price > ema21 and strength in ('strong', 'mild'):
+                # Price reclaimed EMA21 — 4H bearish bias loses its veto
                 override_reason = (
                     f"[INTRABAR] price ({current_price:.2f}) above EMA21 ({ema21:.2f}) "
-                    f"and EMA75 ({ema75:.2f}) — bearish bias downgraded to neutral"
+                    f"— bearish {strength} downgraded to neutral (4H structure no longer in control)"
                 )
                 bias = dict(bias)
                 bias['bias']                 = 'neutral'
                 bias['strength']             = 'none'
-                bias['counter_conf_required'] = 0.75
-            elif current_price > ema21 and strength in ('strong', 'mild'):
-                override_reason = (
-                    f"[INTRABAR] price ({current_price:.2f}) above EMA21 ({ema21:.2f}) "
-                    f"— bearish {strength} downgraded to caution"
-                )
-                bias = dict(bias)
-                bias['strength']             = 'caution'
                 bias['counter_conf_required'] = 0.70
 
         elif combined == 'bullish':
-            if current_price < ema21 and current_price < ema75:
+            if current_price < ema21 and strength in ('strong', 'mild'):
+                # Price lost EMA21 — 4H bullish bias loses its veto
                 override_reason = (
                     f"[INTRABAR] price ({current_price:.2f}) below EMA21 ({ema21:.2f}) "
-                    f"and EMA75 ({ema75:.2f}) — bullish bias downgraded to neutral"
+                    f"— bullish {strength} downgraded to neutral (4H structure no longer in control)"
                 )
                 bias = dict(bias)
                 bias['bias']                 = 'neutral'
                 bias['strength']             = 'none'
-                bias['counter_conf_required'] = 0.75
-            elif current_price < ema21 and strength in ('strong', 'mild'):
-                override_reason = (
-                    f"[INTRABAR] price ({current_price:.2f}) below EMA21 ({ema21:.2f}) "
-                    f"— bullish {strength} downgraded to caution"
-                )
-                bias = dict(bias)
-                bias['strength']             = 'caution'
                 bias['counter_conf_required'] = 0.70
 
         if override_reason:

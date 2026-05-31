@@ -1,0 +1,9 @@
+# Strategy Optimizer dependencies
+mcp>=1.0.0                # MCP Python SDK (FastMCP)
+backtesting>=0.3.3        # Backtesting engine
+optuna>=3.5.0             # Bayesian hyperparameter optimisation
+yfinance>=0.2.44          # Market data
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0           # Parquet caching for yfinance data
+plotly>=5.0.0             # Equity curve plots (optional)

@@ -130,47 +130,27 @@ class LiveTrendMonitor:
         override = None
 
         if combined == 'bearish':
-            if s['ema21_delta'] > 0 and s['ema75_delta'] > 0:
-                # Price above both EMAs — bearish bias is stale
-                new_strength = 'none'
-                new_conf     = 0.75
-                override = (
-                    f"[LIVE MONITOR] price {s['price']:.2f} above EMA21+EMA75 "
-                    f"({s['ema21_sustained_mins']:.0f}min) — bearish {strength} → neutral"
-                )
-                htf_bias = dict(htf_bias)
-                htf_bias['bias']                  = 'neutral'
-                htf_bias['strength']              = new_strength
-                htf_bias['counter_conf_required'] = new_conf
-
-            elif s['ema21_delta'] > 0 and strength in ('strong', 'mild'):
-                # Price above EMA21 only — soften to caution
+            if s['ema21_delta'] > 0 and strength in ('strong', 'mild'):
+                # Price reclaimed EMA21 — closed-bar bearish bias loses its veto
                 override = (
                     f"[LIVE MONITOR] price {s['price']:.2f} above EMA21 "
-                    f"({s['ema21_sustained_mins']:.0f}min) — bearish {strength} → caution"
-                )
-                htf_bias = dict(htf_bias)
-                htf_bias['strength']              = 'caution'
-                htf_bias['counter_conf_required'] = 0.70
-
-        elif combined == 'bullish':
-            if s['ema21_delta'] < 0 and s['ema75_delta'] < 0:
-                override = (
-                    f"[LIVE MONITOR] price {s['price']:.2f} below EMA21+EMA75 "
-                    f"({s['ema21_sustained_mins']:.0f}min) — bullish {strength} → neutral"
+                    f"({s['ema21_sustained_mins']:.0f}min) -- bearish {strength} -> neutral"
                 )
                 htf_bias = dict(htf_bias)
                 htf_bias['bias']                  = 'neutral'
                 htf_bias['strength']              = 'none'
-                htf_bias['counter_conf_required'] = 0.75
+                htf_bias['counter_conf_required'] = 0.70
 
-            elif s['ema21_delta'] < 0 and strength in ('strong', 'mild'):
+        elif combined == 'bullish':
+            if s['ema21_delta'] < 0 and strength in ('strong', 'mild'):
+                # Price lost EMA21 — closed-bar bullish bias loses its veto
                 override = (
                     f"[LIVE MONITOR] price {s['price']:.2f} below EMA21 "
-                    f"({s['ema21_sustained_mins']:.0f}min) — bullish {strength} → caution"
+                    f"({s['ema21_sustained_mins']:.0f}min) -- bullish {strength} -> neutral"
                 )
                 htf_bias = dict(htf_bias)
-                htf_bias['strength']              = 'caution'
+                htf_bias['bias']                  = 'neutral'
+                htf_bias['strength']              = 'none'
                 htf_bias['counter_conf_required'] = 0.70
 
         if override:

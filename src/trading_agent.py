@@ -15,27 +15,54 @@ logger = logging.getLogger(__name__)
 
 
 class TradingAgent:
-    """Claude-powered trading decision engine"""
+    """AI-powered trading decision engine — supports Claude (Anthropic) and Groq (free)."""
 
     def __init__(self, config: Dict[str, Any], api_key: Optional[str] = None):
-        """
-        Initialize Trading Agent
-
-        Args:
-            config: Configuration dictionary with trading parameters
-            api_key: Anthropic API key (or from environment)
-        """
         self.config = config
-        self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
 
-        if not self.api_key:
-            raise ValueError("Anthropic API key required (set ANTHROPIC_API_KEY or pass api_key)")
+        # Provider: "claude" (default) or "groq"
+        # Set via config["claude"]["provider"] or env var AI_PROVIDER
+        self.provider = (
+            os.getenv('AI_PROVIDER')
+            or config.get('claude', {}).get('provider', 'claude')
+        ).lower()
 
-        self.client = Anthropic(api_key=self.api_key)
-        # Env var CLAUDE_MODEL overrides config (useful for quick switching)
-        self.model = os.getenv('CLAUDE_MODEL') or config.get('claude', {}).get('model', 'claude-sonnet-4-6')
+        if self.provider == 'openrouter':
+            from openai import OpenAI
+            or_key = os.getenv('OPENROUTER_API_KEY')
+            if not or_key:
+                raise ValueError("OPENROUTER_API_KEY env var required when provider=openrouter")
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=or_key,
+            )
+            self.model = (
+                os.getenv('OPENROUTER_MODEL')
+                or config.get('claude', {}).get('openrouter_model', 'openrouter/owl-alpha')
+            )
+            logger.info(f"TradingAgent using OPENROUTER — model={self.model}")
+        elif self.provider == 'groq':
+            from groq import Groq
+            groq_key = os.getenv('GROQ_API_KEY')
+            if not groq_key:
+                raise ValueError("GROQ_API_KEY env var required when provider=groq")
+            self.client = Groq(api_key=groq_key)
+            self.model = (
+                os.getenv('GROQ_MODEL')
+                or config.get('claude', {}).get('groq_model', 'llama-3.3-70b-versatile')
+            )
+            logger.info(f"TradingAgent using GROQ — model={self.model} (free tier)")
+        else:
+            self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
+            if not self.api_key:
+                raise ValueError("ANTHROPIC_API_KEY required when provider=claude")
+            self.client = Anthropic(api_key=self.api_key)
+            self.model = (
+                os.getenv('CLAUDE_MODEL')
+                or config.get('claude', {}).get('model', 'claude-sonnet-4-6')
+            )
+            logger.info(f"TradingAgent using CLAUDE — model={self.model}")
 
-        # Extract config parameters
         self.min_risk_reward = config.get('trading_params', {}).get('min_risk_reward', 3.0)
         self.confidence_threshold = config.get('trading_params', {}).get('confidence_threshold', 0.65)
         self.stop_loss_min = config.get('risk_management', {}).get('stop_loss_min', 15)
@@ -43,10 +70,9 @@ class TradingAgent:
         self.stop_loss_max = config.get('risk_management', {}).get('stop_loss_max', 50)
         self.stop_buffer = config.get('risk_management', {}).get('stop_buffer', 5)
 
-        # Built once at init — static for the session, eligible for prompt caching
         self._system_prompt = self._build_system_prompt()
 
-        logger.info(f"TradingAgent initialized (model={self.model}, min_rr={self.min_risk_reward})")
+        logger.info(f"TradingAgent initialized (provider={self.provider}, model={self.model}, min_rr={self.min_risk_reward})")
 
     def _find_psychological_levels(self, current_price: float, interval: int = 100) -> Dict[str, float]:
         """
@@ -74,66 +100,72 @@ class TradingAgent:
             'below': level_below
         }
 
-    def query_claude_with_retry(self, user_message: str, max_retries: int = 5) -> Dict[str, Any]:
-        """
-        Query Claude API with exponential backoff retry logic.
-        Sends the static system prompt with cache_control so Anthropic caches it
-        for 5 minutes — only the dynamic user_message is billed in full each bar.
-        """
-        base_delay = 2  # Start with 2 second delay
+    def query_claude_with_retry(self, user_message: str, max_retries: int = 5) -> Any:
+        """Query the configured AI provider with exponential backoff retry."""
+        base_delay = 2
 
         for attempt in range(max_retries):
             try:
-                response = self.client.messages.create(
-                    model=self.model,
-                    max_tokens=8192,
-                    temperature=0.3,
-                    system=[{
-                        "type": "text",
-                        "text": self._system_prompt,
-                        "cache_control": {"type": "ephemeral"}
-                    }],
-                    messages=[{
-                        "role": "user",
-                        "content": user_message
-                    }]
-                )
-                return response
-
-            except APIError as e:
-                error_message = str(e)
-
-                # Check if it's an overload error (529) or rate limit
-                is_retryable = (
-                    'overloaded' in error_message.lower() or
-                    '529' in error_message or
-                    'rate_limit' in error_message.lower() or
-                    '429' in error_message
-                )
-
-                if is_retryable and attempt < max_retries - 1:
-                    # Calculate exponential backoff delay
-                    delay = base_delay * (2 ** attempt)
-
-                    logger.warning(f"API Error (attempt {attempt + 1}/{max_retries}): {error_message}")
-                    logger.warning(f"Retrying in {delay} seconds...")
-
-                    # Show user-friendly message
-                    print(f"\n[WAIT] API temporarily overloaded. Retrying in {delay}s... (attempt {attempt + 1}/{max_retries})")
-
-                    time.sleep(delay)
+                if self.provider == 'groq':
+                    return self._query_groq(user_message)
+                elif self.provider == 'openrouter':
+                    return self._query_openrouter(user_message)
                 else:
-                    # Last attempt or non-retryable error
-                    logger.error(f"API Error (final attempt): {error_message}")
-                    raise
+                    return self._query_claude(user_message)
 
             except Exception as e:
-                # Non-API errors should not be retried
-                logger.error(f"Unexpected error querying Claude: {e}")
-                raise
+                error_message = str(e)
+                is_retryable = any(x in error_message.lower() for x in
+                                   ['overloaded', '529', 'rate_limit', '429', 'rate limit'])
 
-        # Should never reach here, but just in case
+                if is_retryable and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"API error (attempt {attempt+1}/{max_retries}), retrying in {delay}s: {error_message}")
+                    print(f"\n[WAIT] API busy. Retrying in {delay}s... ({attempt+1}/{max_retries})")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"API error (final attempt): {error_message}")
+                    raise
+
         raise Exception("Max retries exceeded")
+
+    def _query_claude(self, user_message: str):
+        """Anthropic Claude — system prompt cached for 5 min to save tokens."""
+        return self.client.messages.create(
+            model=self.model,
+            max_tokens=8192,
+            temperature=0.3,
+            system=[{
+                "type": "text",
+                "text": self._system_prompt,
+                "cache_control": {"type": "ephemeral"}
+            }],
+            messages=[{"role": "user", "content": user_message}]
+        )
+
+    def _query_groq(self, user_message: str):
+        """Groq free-tier — OpenAI-compatible interface."""
+        return self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=8192,
+            temperature=0.3,
+            messages=[
+                {"role": "system", "content": self._system_prompt},
+                {"role": "user",   "content": user_message}
+            ]
+        )
+
+    def _query_openrouter(self, user_message: str):
+        """OpenRouter — OpenAI-compatible interface."""
+        return self.client.chat.completions.create(
+            model=self.model,
+            max_tokens=8192,
+            temperature=0.3,
+            messages=[
+                {"role": "system", "content": self._system_prompt},
+                {"role": "user",   "content": user_message}
+            ]
+        )
 
     def _build_system_prompt(self) -> str:
         """
@@ -141,241 +173,40 @@ class TradingAgent:
         Sent with cache_control so Anthropic caches it across bars — only the
         dynamic market snapshot (build_user_message) is billed in full each bar.
         """
-        return f"""You are an expert NQ futures trader specializing in price action analysis using Fair Value Gaps, EMAs, and momentum indicators.
+        return f"""NQ futures trader. Analyze bar-by-bar, update incrementally, wait for quality setups.
 
-YOUR TRADING PHILOSOPHY:
-========================
-- PATIENCE IS KEY: It's perfectly acceptable to wait for quality setups
-- Don't force trades - wait for confluence and proper setup development
-- Maintain continuity in your analysis across bars
-- Update your assessment incrementally based on what changed
-- Track setups over multiple bars as they develop
+TREND RULE (most important): If price is above EMA21+EMA75 = bullish trend. In a bull trend, FVGs below are SUPPORT not short targets. Do NOT short just because a bullish FVG exists below. Follow the trend.
 
-TRADING INFORMATION AVAILABLE:
-===============================
-You have access to multiple sources of information to identify high-probability setups.
-Use ALL available data to find the best trade opportunity.
+SETUPS: FVG_FILL | EMA_BOUNCE | MOMENTUM | LEVEL_TRADE | COUNTER_TREND | KELTNER_BOUNCE | SWEEP_FVG | HA_TREND
 
-1. FAIR VALUE GAPS (FVGs) - Price imbalances that attract fills
-   - Bullish FVG BELOW = SHORT opportunity (price drawn down to fill gap)
-   - Bearish FVG ABOVE = LONG opportunity (price drawn up to fill gap)
+STOPS (structure-based, never fixed):
+- FVG_FILL LONG: below nearest support - 5pts (min {self.stop_loss_min}pts)
+- FVG_FILL SHORT: above nearest resistance + 5pts
+- EMA_BOUNCE: EMA level ± 10pts
+- LEVEL_TRADE: key level ± 10pts
+- MOMENTUM/COUNTER: recent swing ± 5pts
+- SWEEP_FVG: swept level ± 5pts (sweep must be within 5 bars)
+- HA_TREND LONG: low of first bullish HA candle - 5pts (only if EMA21>EMA75 or price>EMA21)
+- HA_TREND SHORT: high of first bearish HA candle + 5pts (only if EMA21<EMA75 or price<EMA21)
 
-2. EMA STRUCTURE - Trend identification and dynamic support/resistance
-   - EMA21, EMA75, EMA150 alignment shows trend strength
-   - EMAs act as support in uptrends, resistance in downtrends
-   - Pullbacks to EMAs offer entry opportunities
+TARGET BUFFER: LONG final target = raw - 5pts. SHORT final target = raw + 5pts.
 
-3. STOCHASTIC MOMENTUM - Overbought/oversold and momentum direction
-   - >80 = Overbought (potential reversal or continuation)
-   - <20 = Oversold (potential reversal or continuation)
-   - Direction shows momentum alignment
+RULES:
+- Min R/R: {self.min_risk_reward}:1 (calculate from actual prices, must match risk_reward field exactly)
+- Stop range: {self.stop_loss_min}-{self.stop_loss_max}pts. Confidence threshold: {self.confidence_threshold}
+- Abandon "waiting" setup if price moves 30pts away OR after 8 bars
+- Always have Plan A and Plan B in waiting_for
+- Stoch 60-80 in uptrend = bullish continuation, NOT a short signal
+- Positive gamma alone does NOT justify counter-trend shorts in a bull trend
 
-4. PSYCHOLOGICAL LEVELS (EMS) - Round numbers attract price
-   - 100-point intervals (e.g., 25500, 25600)
-   - Act as magnets, support, and resistance
-
-AVAILABLE SETUP TYPES:
-======================
-1. FVG_FILL      - Trading to fill a fair value gap
-2. EMA_BOUNCE    - Pullback to EMA support/resistance
-3. MOMENTUM      - Strong directional move with confluence
-4. LEVEL_TRADE   - Break or rejection at psychological level
-5. COUNTER_TREND - Mean reversion from extreme conditions
-6. KELTNER_BOUNCE - Price at Keltner channel extreme + stochastic oversold/overbought (technical mean reversion)
-7. SWEEP_FVG     - Liquidity sweep of a swing high/low followed by FVG confirmation (SMC entry)
-
-UNIVERSAL TARGET BUFFER RULE:
-=============================
-For ALL trades, apply 5-point buffer to avoid needing perfect precision:
-- LONG trades: Final Target = Raw Target - 5 points
-- SHORT trades: Final Target = Raw Target + 5 points
-
-This accounts for spread/slippage and protects against stop-hunting at exact levels.
-
-CRITICAL INSTRUCTIONS FOR INCREMENTAL ANALYSIS:
-===============================================
-You are NOT doing a fresh analysis. You are UPDATING your previous assessment.
-
-Ask yourself:
-1. What changed with this new bar?
-2. Is my previous setup still valid?
-3. Should I continue waiting or has the setup improved/deteriorated?
-4. Has price moved closer to or further from my planned entry?
-
-SETUP ABANDONMENT RULES — check these EVERY bar when status is "waiting":
-- If price has moved MORE THAN 30 points AWAY from your planned entry: ABANDON immediately
-  → The setup is no longer valid at that level. Set status "none", clear entry_plan.
-- If you have been "waiting" for MORE THAN 8 bars without triggering: ABANDON
-  → Price has rejected the level. The setup is stale. Move on.
-- After abandoning: do NOT say "setup missed". Immediately scan from current price.
-  → Ask: given where price IS RIGHT NOW, what is the best available setup?
-  → The move away from your entry may have CREATED a new setup in the other direction.
-
-PLAN B REQUIREMENT — mandatory when status is "waiting":
-- You must ALWAYS define what you do if Plan A does NOT trigger.
-- "waiting_for" must name BOTH scenarios:
-  → "Plan A: SHORT bounce to 30000. Plan B: LONG if price breaks above 30050 and holds."
-- If the opposite direction is truly invalid, explain why in one sentence.
-- A system with only one plan will go days without a trade. Always have a Plan B.
-
-DECISION CRITERIA:
-==================
-- Minimum Risk/Reward: {self.min_risk_reward}:1 (calculated from actual prices — not self-reported)
-- Stop Loss Range: {self.stop_loss_min}-{self.stop_loss_max} points
-- Confidence Threshold: {self.confidence_threshold}
-
-STOP LOSS PHILOSOPHY — DYNAMIC, STRUCTURE-BASED:
-=================================================
-Stops are placed at the level where the trade thesis is DEFINITIVELY WRONG.
-Never use a fixed default. Size each stop to the current structure and setup type.
-
-STEP 1 — Identify the invalidation level for this specific trade right now:
-  FVG_FILL SHORT: The thesis breaks if price reclaims the level it was rejected from.
-    → Stop = nearest resistance ABOVE entry (nearest psychological level, nearest EMA above, or recent swing high) + 5pt buffer.
-    → If entry is within 15pts of a psych level: stop = psych_level + 5pts.
-    → If no clear level nearby: stop = entry + (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
-
-  FVG_FILL LONG: The thesis breaks if price loses the support it bounced from.
-    → Stop = nearest support BELOW entry (nearest psychological level, nearest EMA below, or recent swing low) - 5pt buffer.
-    → If entry is within 15pts of a psych level: stop = psych_level - 5pts.
-    → If no clear level nearby: stop = entry - (FVG_size × 1.2), minimum {self.stop_loss_min}pts.
-
-  EMA_BOUNCE LONG: Stop = EMA that price bounced from - 10pts.
-  EMA_BOUNCE SHORT: Stop = EMA that price bounced from + 10pts.
-
-  LEVEL_TRADE: Stop = the key level ± 10pts (beyond the level being traded).
-
-  MOMENTUM / COUNTER_TREND: Stop = most recent swing high (SHORT) or swing low (LONG) + 5pt buffer.
-
-  KELTNER_BOUNCE LONG: Thesis is that price bounced off the Keltner lower band.
-    → Stop = Keltner lower band value at entry - 8pts.
-    → Target = Keltner midline (mean-reversion target).
-    → If stochastic is not yet below 20, wait — do not pre-empt the signal.
-
-  KELTNER_BOUNCE SHORT: Thesis is that price rejected at the Keltner upper band.
-    → Stop = Keltner upper band value at entry + 8pts.
-    → Target = Keltner midline.
-    → If stochastic is not yet above 80, wait — do not pre-empt the signal.
-
-  SWEEP_FVG LONG: Price swept a recent swing low (trapping shorts) then entered a bullish FVG.
-    → Stop = the swing low level that was swept - 5pts (below the trap level).
-    → Target = next bearish FVG above or next swing high.
-    → The sweep must have occurred within the last 5 bars. Stale sweeps do not count.
-
-  SWEEP_FVG SHORT: Price swept a recent swing high (trapping longs) then entered a bearish FVG.
-    → Stop = the swing high level that was swept + 5pts (above the trap level).
-    → Target = next bullish FVG below or next swing low.
-    → The sweep must have occurred within the last 5 bars.
-
-  HA_TREND LONG: First bullish Heikin Ashi flip (bearish → bullish candle) with EMA21 rising.
-    → Stop = low of the first bullish HA candle in the sequence - 5pts.
-    → Target = nearest resistance (FVG above, EMA level, or psychological level).
-    → Only valid if EMA21 > EMA75 OR price is above EMA21. Do not trade HA flips into downtrends.
-
-  HA_TREND SHORT: First bearish Heikin Ashi flip (bullish → bearish candle) with EMA21 falling.
-    → Stop = high of the first bearish HA candle in the sequence + 5pts.
-    → Target = nearest support (FVG below, EMA level, or psychological level).
-    → Only valid if EMA21 < EMA75 OR price is below EMA21. Do not trade HA flips into uptrends.
-
-STEP 2 — Verify the math before committing:
-  risk  = abs(entry - stop)
-  reward = abs(target - entry)
-  R/R   = reward / risk
-
-  If R/R < {self.min_risk_reward}: DO NOT take the trade. Do not argue exceptions.
-  If R/R ≥ {self.min_risk_reward}: setup is valid.
-
-STEP 3 — Report the stop you calculated, not a rounded guess.
-  The risk_reward field in your JSON MUST match abs(target - entry) / abs(stop - entry) exactly.
-  Do not write a different number in risk_reward than your math produces.
-
-ANALYSIS REQUIRED:
-==================
-You MUST provide a COMPLETE response with both long_assessment and short_assessment.
-
-IMPORTANT: If you don't see a quality setup, that's COMPLETELY ACCEPTABLE.
-- Use status: "none" for assessments with no valid setup
-- Use status: "waiting" for setups you're monitoring but not ready to trade
-- Use status: "ready" for setups that meet all criteria and are tradeable NOW
-
-For EACH assessment (long and short):
-1. Determine status: "none", "waiting", or "ready"
-2. If status is NOT "none", provide:
-   - Setup Type: Choose ONE: FVG_FILL, EMA_BOUNCE, MOMENTUM, LEVEL_TRADE, COUNTER_TREND, KELTNER_BOUNCE, SWEEP_FVG, or HA_TREND
-   - Entry price: Current price or nearby entry level
-   - Raw Target: Your identified target level BEFORE buffer
-   - Final Target: Apply 5pt buffer (LONG: raw - 5, SHORT: raw + 5)
-   - Stop loss: Structure-based per the rules above — NOT a fixed number
-   - Risk/Reward ratio: reward / risk using your actual prices — must match exactly
-   - Confidence level (0.0-1.0)
-   - Reasoning: Identify the invalidation level, explain stop placement, show R/R math
-3. If status is "none", explain why no setup exists
-
-Update Your Assessment Based On:
-- What changed from previous analysis?
-- Has the invalidation level shifted?
-- FVG quality and proximity
-- EMA trend alignment
-- Stochastic momentum direction and level
-- How long you've been tracking this setup (setup_age_bars)
-- Whether you should keep waiting or abandon the setup
-
-Respond in JSON format:
-{{
-    "current_bar_index": <increment from previous or 0 if first>,
-    "overall_bias": "bullish" | "bearish" | "neutral",
-    "waiting_for": "<describe what you're waiting for, or 'No quality setup' if none>",
-
-    "long_assessment": {{
-        "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
-        "entry_plan": <price or null>,
-        "stop_plan": <price or null>,
-        "raw_target": <target before buffer or null>,
-        "target_plan": <final target WITH 5pt buffer applied or null>,
-        "risk_reward": <ratio calculated with final target or null>,
-        "confidence": <0.0-1.0>,
-        "reasoning": "<explain setup type, confluence, why chosen>"
-    }},
-
-    "short_assessment": {{
-        "status": "none" | "waiting" | "ready",
-        "setup_type": "FVG_FILL" | "EMA_BOUNCE" | "MOMENTUM" | "LEVEL_TRADE" | "COUNTER_TREND" | "KELTNER_BOUNCE" | "SWEEP_FVG" | "HA_TREND" | null,
-        "entry_plan": <price or null>,
-        "stop_plan": <price or null>,
-        "raw_target": <target before buffer or null>,
-        "target_plan": <final target WITH 5pt buffer applied or null>,
-        "risk_reward": <ratio calculated with final target or null>,
-        "confidence": <0.0-1.0>,
-        "reasoning": "<explain setup type, confluence, why chosen>"
-    }},
-
-    "primary_decision": "LONG" | "SHORT" | "NONE" | "EXIT",
-    "overall_reasoning": "<incremental update: what changed from previous bar, should we trade or continue waiting>",
-
-    "long_setup": {{
-        "setup_type": <from long_assessment>,
-        "entry": <entry_plan from long_assessment>,
-        "stop": <stop_plan from long_assessment>,
-        "target": <target_plan (WITH buffer) from long_assessment>,
-        "risk_reward": <ratio from long_assessment>,
-        "confidence": <confidence from long_assessment>,
-        "reasoning": "<reasoning from long_assessment>"
-    }},
-
-    "short_setup": {{
-        "setup_type": <from short_assessment>,
-        "entry": <entry_plan from short_assessment>,
-        "stop": <stop_plan from short_assessment>,
-        "target": <target_plan (WITH buffer) from short_assessment>,
-        "risk_reward": <ratio from short_assessment>,
-        "confidence": <confidence from short_assessment>,
-        "reasoning": "<reasoning from short_assessment>"
-    }}
+Respond ONLY with JSON:
+{{"current_bar_index":<int>,"overall_bias":"bullish"|"bearish"|"neutral","waiting_for":"<plan A and B>",
+"long_assessment":{{"status":"none"|"waiting"|"ready","setup_type":"<type>"|null,"entry_plan":<price>|null,"stop_plan":<price>|null,"raw_target":<price>|null,"target_plan":<price>|null,"risk_reward":<float>|null,"confidence":<0-1>,"reasoning":"<brief>"}},
+"short_assessment":{{"status":"none"|"waiting"|"ready","setup_type":"<type>"|null,"entry_plan":<price>|null,"stop_plan":<price>|null,"raw_target":<price>|null,"target_plan":<price>|null,"risk_reward":<float>|null,"confidence":<0-1>,"reasoning":"<brief>"}},
+"primary_decision":"LONG"|"SHORT"|"NONE"|"EXIT","overall_reasoning":"<what changed, why trade or wait>",
+"long_setup":{{"setup_type":"<type>","entry":<price>|null,"stop":<price>|null,"target":<price>|null,"risk_reward":<float>|null,"confidence":<0-1>,"reasoning":"<brief>"}},
+"short_setup":{{"setup_type":"<type>","entry":<price>|null,"stop":<price>|null,"target":<price>|null,"risk_reward":<float>|null,"confidence":<0-1>,"reasoning":"<brief>"}}
 }}
-
-IMPORTANT: The long_setup and short_setup fields must be populated for backward compatibility,
-but your PRIMARY analysis should be in long_assessment and short_assessment.
 Only set primary_decision to LONG/SHORT if the corresponding assessment status is "ready".
 """
 
@@ -394,8 +225,10 @@ Only set primary_decision to LONG/SHORT if the corresponding assessment status i
         """
         prompt = ""
 
-        # Add previous analysis if available
+        # Groq free tier: cap previous analysis to keep total request under 12K tokens
         if previous_analysis:
+            if self.provider == 'groq' and len(previous_analysis) > 800:
+                previous_analysis = previous_analysis[:800] + "\n...[trimmed for token limit]\n"
             prompt += previous_analysis + "\n"
 
         if htf_context:
@@ -470,23 +303,20 @@ Price: {fvg_context['current_price']:.2f}
 FAIR VALUE GAPS:
 """
 
-        # Add bullish FVG info (SHORT opportunity)
+        # Add bullish FVG info (gap fill SHORT target OR support in uptrend)
         if fvg_context.get('nearest_bullish_fvg'):
             fvg = fvg_context['nearest_bullish_fvg']
             raw_target = fvg['bottom']  # Bottom of gap
             final_target = raw_target + 5  # Add 5pt buffer for SHORT
             prompt += f"""
-Nearest Bullish FVG BELOW (SHORT opportunity - FVG_FILL setup):
+Nearest Bullish FVG BELOW (gap fill SHORT target OR long support in uptrend):
   Zone: {fvg['bottom']:.2f} - {fvg['top']:.2f}
   Size: {fvg['size']:.2f} points
   Age: {fvg.get('age_bars', 0)} bars
 
-  Raw Target: {raw_target:.2f} (bottom of gap)
-  Final Target: {final_target:.2f} (bottom + 5pt buffer)
-  Distance: {final_target - fvg_context['current_price']:.2f} points
-
-  Setup Idea: Enter SHORT, ride price DOWN to fill gap
-  This gap formed when price jumped UP, leaving unfilled space below.
+  If SHORT: Raw Target {raw_target:.2f}, Final Target {final_target:.2f} (+5pt buffer), Distance {final_target - fvg_context['current_price']:.2f}pts
+  If LONG (uptrend): this gap is support — price may bounce from this zone, not fill it.
+  NOTE: In a strong uptrend (price above EMA21+EMA75), counter-trend FVG fills are LOW probability.
 """
         else:
             prompt += "\nNo bullish FVGs BELOW current price\n"
@@ -553,11 +383,11 @@ Stochastic: {stoch:.2f}
         if stoch < 20:
             prompt += "  OVERSOLD - Potential COUNTER_TREND long (mean reversion)\n"
         elif stoch > 80:
-            prompt += "  OVERBOUGHT - Potential COUNTER_TREND short (mean reversion)\n"
+            prompt += "  OVERBOUGHT - Potential COUNTER_TREND short OR bullish continuation in strong uptrend\n"
         elif stoch < 40:
             prompt += "  Below midpoint - Can support MOMENTUM long if trending up\n"
         elif stoch > 60:
-            prompt += "  Above midpoint - Can support MOMENTUM short if trending down\n"
+            prompt += "  Above midpoint - Bullish continuation in uptrend; counter-trend short only if HTF bearish AND price below EMA21\n"
         else:
             prompt += "  Neutral zone\n"
 
@@ -795,13 +625,30 @@ Average R/R: {stats['avg_rr']:.2f}:1
             # Query Claude with retry logic (system prompt cached, user message dynamic)
             response = self.query_claude_with_retry(prompt, max_retries=5)
 
+            # Log cache stats so we can verify caching is working
+            usage = getattr(response, 'usage', None)
+            if usage:
+                cache_read    = getattr(usage, 'cache_read_input_tokens', 0)
+                cache_written = getattr(usage, 'cache_creation_input_tokens', 0)
+                input_tokens  = getattr(usage, 'input_tokens', 0)
+                output_tokens = getattr(usage, 'output_tokens', 0)
+                if cache_read:
+                    logger.info(f"[CACHE HIT] read={cache_read} tokens | input={input_tokens} | output={output_tokens}")
+                elif cache_written:
+                    logger.info(f"[CACHE WRITE] written={cache_written} tokens | input={input_tokens} | output={output_tokens}")
+                else:
+                    logger.info(f"[CACHE MISS] input={input_tokens} | output={output_tokens}")
+
             # Stop animation
             waiting = False
             time.sleep(0.1)  # Let animation thread finish
             print('\r' + ' ' * 40 + '\r', end='', flush=True)  # Clear line
 
             # Extract response text
-            response_text = response.content[0].text
+            if self.provider in ('groq', 'openrouter'):
+                response_text = response.choices[0].message.content
+            else:
+                response_text = response.content[0].text
 
             # Show full response (debug only)
             logger.debug("="*60)

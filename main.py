@@ -261,6 +261,13 @@ class TradingOrchestrator:
         # Track last processed bar and result
         last_bar_time = None
         last_result = None
+        _last_stale_warn = None   # throttle repeated stale-feed warnings
+
+        # How many minutes without a new bar before we call the feed dead.
+        # 5-min bars: 15 min is 3 missed bars — clearly stale.
+        # During overnight/weekend the market IS closed, so this just means
+        # we surface the "feed dead" message instead of silently looping.
+        STALE_FEED_MINUTES = 15
 
         try:
             while True:
@@ -270,6 +277,30 @@ class TradingOrchestrator:
 
                 # Get latest bar timestamp
                 current_bar_time = historical_df.iloc[-1]['DateTime']
+
+                # ── Feed-staleness check ──────────────────────────────────
+                # Use the CSV file's OS modification time, not the bar timestamp.
+                # This works correctly for both live trading AND Market Replay —
+                # in replay, bar timestamps are historical but the file itself is
+                # being written right now, so mtime stays current.
+                csv_mtime = Path('data/HistoricalData.csv').stat().st_mtime
+                file_age_mins = (time.time() - csv_mtime) / 60
+                if file_age_mins > STALE_FEED_MINUTES:
+                    now = datetime.now()
+                    if _last_stale_warn is None or (now - _last_stale_warn).total_seconds() > 600:
+                        _last_stale_warn = now
+                        age_h = int(file_age_mins // 60)
+                        age_m = int(file_age_mins % 60)
+                        age_str = f"{age_h}h {age_m}m" if age_h else f"{age_m}m"
+                        print(f"\n{'!'*60}")
+                        print(f"  FEED DEAD — file not updated in {age_str} (last bar: {current_bar_time})")
+                        print(f"  NinjaTrader may be closed, disconnected, or market is closed.")
+                        print(f"{'!'*60}\n")
+                        logger.warning(f"Feed stale: file not updated in {age_str}")
+                    time.sleep(60)
+                    continue
+                else:
+                    _last_stale_warn = None   # feed is live/replaying — reset warning state
 
                 # Check if new bar arrived
                 if current_bar_time != last_bar_time:
@@ -416,12 +447,22 @@ class TradingOrchestrator:
                         ha_result   = self.ha_trend.update(market_data)
                         ha_section  = ha_result.get('prompt_section', '')
 
+                        # Groq free tier: drop lower-priority sections to stay under 12K token limit
+                        using_groq = self.trading_agent.provider == 'groq'
+                        htf_section = htf_bias.get('prompt_section', '')
+                        trend_section = self.live_trend.get_prompt_section()
+                        htf_context_str = (
+                            htf_section + trend_section + gamma_section
+                            if using_groq else
+                            htf_section + trend_section + gamma_section + of_section + dom_section + detector_section + ha_section
+                        )
+
                         result = self.trading_agent.analyze_setup(
                             fvg_context,
                             market_data,
                             memory_context,
                             previous_analysis,
-                            htf_bias.get('prompt_section', '') + self.live_trend.get_prompt_section() + gamma_section + of_section + dom_section + detector_section + ha_section,
+                            htf_context_str,
                             self.open_position
                         )
                         last_result = result

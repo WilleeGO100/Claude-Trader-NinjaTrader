@@ -72,7 +72,7 @@ namespace NinjaTrader.NinjaScript.Strategies
                 OrderFillResolution     = OrderFillResolution.Standard;
                 StopTargetHandling      = StopTargetHandling.PerEntryExecution;
                 StartBehavior           = StartBehavior.WaitUntilFlat;
-                TimeInForce             = TimeInForce.Gtc;
+                TimeInForce             = NinjaTrader.Cbi.TimeInForce.Gtc;
                 BarsRequiredToTrade     = 1;
 
                 // Exposed parameters
